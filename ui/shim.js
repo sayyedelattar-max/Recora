@@ -14,7 +14,7 @@
     { path: "C:\\v\\Tutorial intro.mp4", name: "Tutorial intro", ext: "mp4", size: 77e6, modified: now - 700000, duration: 95, thumb: svgThumb("#cfd3f0", "#f0d3e6"), markers: [12] },
   ];
   const cmds = {
-    get_settings: () => S,
+    get_settings: () => S, edit_strip: () => window.__strip || null, edit_export: (a) => { window.__proj = a.project; return 'D:\\Recordings\\clip (edited).mp4'; },
     set_settings: ({ new: n }) => { S = n; },
     get_phase: () => "idle",
     get_sources: () => ({ platform: "windows", mics: ["Microphone (Realtek Audio)", "Headset (USB)"], monitors: [{ index: 0, name: "\\\\.\\DISPLAY1", width: 2560, height: 1600, primary: true }, { index: 1, name: "\\\\.\\DISPLAY2", width: 1920, height: 1080, primary: false }], windows: [{ hwnd: "11", title: "Zoom Meeting", process: "Zoom.exe" }, { hwnd: "12", title: "Memoq - LQA Project", process: "memoQ.exe" }, { hwnd: "13", title: "Google Chrome", process: "chrome.exe" }, { hwnd: "14", title: "Visual Studio Code", process: "Code.exe" }] }),

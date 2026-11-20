@@ -58,3 +58,11 @@ pub fn duration(path: &Path) -> Option<f64> {
 pub fn has_audio(path: &Path) -> bool {
     cmd().args(["-hide_banner", "-i"]).arg(path).output().map(|o| String::from_utf8_lossy(&o.stderr).contains("Audio:")).unwrap_or(false)
 }
+
+/// Frame rate of the first video stream, if the header says one.
+pub fn fps(path: &Path) -> Option<f64> {
+    let out = cmd().args(["-hide_banner", "-i"]).arg(path).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    let i = text.find(" fps")?;
+    text[..i].rsplit(|c: char| c == ',' || c == ' ').find(|s| !s.is_empty())?.parse::<f64>().ok()
+}

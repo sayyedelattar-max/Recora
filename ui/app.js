@@ -309,6 +309,7 @@
         <input class="name" id="nm" value="${esc(it.name)}" spellcheck="false" title="Click to rename">
         <div class="stats"><span class="chip">${fmt(dur)}</span><span class="chip">${size(it.size)}</span><span class="chip">${esc(it.ext.toUpperCase())}</span>${it.markers.length ? `<span class="chip">${I("flag")}${it.markers.length} ${it.markers.length === 1 ? "marker" : "markers"}</span>` : ""}</div>
         ${(opts.notes || []).map((n) => `<div class="note warn">${esc(n)}</div>`).join("")}
+        ${isVid && dur > 1 ? `<button class="btn primary" id="ed-open" style="width:100%;height:38px">${I("film")}Edit video</button>` : ""}
         ${isVid && dur > 1 ? `<div class="trim"><div class="label">Trim</div><div class="range" id="rg"><div class="track"></div><div class="sel" id="sel"></div>${it.markers.map((m) => `<i class="mkr" style="left:${(m / dur) * 100}%" title="Marker ${fmt(m)}"></i>`).join("")}<i class="ph" id="ph"></i><div class="h" id="ha"></div><div class="h" id="hb"></div></div>
           <div class="times"><span id="ta">00:00</span><span id="tl"></span><span id="tb"></span></div>
           <div style="display:flex;gap:8px;margin-top:10px"><button class="btn sm" id="trim-fast" title="Instant, cuts at the nearest keyframe">${I("scissors")}Trim fast</button><button class="btn sm" id="trim-pre" title="Frame-accurate, takes longer">Trim exact</button></div></div>` : ""}
@@ -320,6 +321,7 @@
     document.body.appendChild(el);
     el.addEventListener("mousedown", (e) => { if (e.target === el) closeClip(); });
     $("#cx").onclick = closeClip;
+    const eo = $("#ed-open"); if (eo) eo.onclick = () => { closeClip(); openEditor(it, () => refreshLib()); };
     $("#op").onclick = () => invoke("open_file", { path: it.path });
     $("#rv").onclick = () => invoke("reveal", { path: it.path });
     $("#dl").onclick = async () => { if (confirm("Move this recording to the recycle bin?")) { try { await invoke("lib_delete", { path: it.path }); closeClip(); refreshLib(); } catch (e) { toast(e, true); } } };

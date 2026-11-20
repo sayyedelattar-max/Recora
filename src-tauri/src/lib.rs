@@ -1,5 +1,6 @@
 mod apps;
 mod diag;
+mod edit;
 mod ffmpeg;
 mod library;
 mod recorder;
@@ -636,6 +637,15 @@ async fn lib_export(path: String, kind: String) -> R<String> {
         .map_err(e2s)?
 }
 #[tauri::command]
+async fn edit_export(project: edit::Project) -> R<String> {
+    tauri::async_runtime::spawn_blocking(move || edit::export(&project).map(|p| p.to_string_lossy().to_string()).map_err(e2s)).await.map_err(e2s)?
+}
+#[tauri::command]
+async fn edit_strip(state: State<'_, AppState>, path: String, n: u32) -> R<String> {
+    let work = PathBuf::from(state.settings.lock().out_dir.clone()).join(".recora").join("strips");
+    tauri::async_runtime::spawn_blocking(move || edit::strip(Path::new(&path), &work, n.clamp(4, 40)).map(|p| p.to_string_lossy().to_string()).map_err(e2s)).await.map_err(e2s)?
+}
+#[tauri::command]
 fn reveal(path: String) -> R<()> {
     tauri_plugin_opener::reveal_item_in_dir(path).map_err(e2s)
 }
@@ -742,7 +752,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())
