@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Recora</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { background: transparent !important; overflow: hidden; }
+  body { height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding-top: 4px; color: #fff; user-select: none; }
+  /* the island is always dark, in light and dark mode, like the one on an iPhone */
+  .pill { height: 40px; width: 168px; border-radius: 20px; background: #000; box-shadow: 0 0 0 .5px rgba(255, 255, 255, .14), 0 8px 24px rgba(0, 0, 0, .35); display: flex; align-items: center; padding: 0 10px 0 15px; gap: 9px; overflow: hidden; white-space: nowrap; transition: width .32s cubic-bezier(.3, 1.25, .45, 1), height .32s cubic-bezier(.3, 1.25, .45, 1), border-radius .32s; }
+  .pill.rec { width: 212px; padding: 0 8px 0 14px; gap: 8px; }
+  .pill.open { width: 330px; }
+  .opt { display: flex; gap: 8px; max-width: 0; opacity: 0; overflow: hidden; margin-right: -8px; transition: max-width .32s cubic-bezier(.3, 1.2, .45, 1), opacity .2s, margin .32s; }
+  .pill.open .opt { max-width: 130px; opacity: 1; margin-right: 0; }
+  .paused .time { animation: beat 1.2s ease-in-out infinite; color: #ffb340; }
+  .cb.pz { background: rgba(255, 255, 255, .14); }
+  .paused .cb.pz { background: #ffb340; color: #000; }
+  .cb.cancel { color: #8e8e93; }
+  .cb.cancel:hover { color: #ff6961; background: rgba(255, 69, 58, .16); }
+  .cb.ask { width: auto; border-radius: 15px; padding: 0 10px; font-size: 12px; font-weight: 600; background: rgba(255, 69, 58, .2); color: #ff6961; }
+  .ask-on .pz, .ask-on .stop { display: none; }
+  .cb { transition: background .12s, opacity .2s; }
+  .pill.labels { height: 62px; border-radius: 26px; align-items: flex-start; padding-top: 11px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #ff453a; flex: none; animation: beat 1.8s ease-in-out infinite; }
+  .paused .dot { animation: none; background: #ffb340; }
+  @keyframes beat { 50% { opacity: .45; } }
+  .time { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 46px; }
+  .sp { flex: 1; min-width: 0; }
+  .cb { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #e5e5ea; position: relative; flex: none; transition: background .12s; }
+  .cb:hover { background: rgba(255, 255, 255, .16); color: #fff; }
+  .cb.off { color: #ff6961; }
+  .cb.stop { background: #ff453a; color: #fff; }
+  .cb.stop:hover { background: #ff6259; }
+  .cb svg.i { width: 16px; height: 16px; }
+  .cb .lv { position: absolute; left: 8px; right: 8px; bottom: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .18); overflow: hidden; }
+  .cb .lv i { display: block; height: 100%; width: 0; background: #32d74b; transition: width .08s; }
+  .cb.flash { color: #ffd60a; }
+  .cb small { display: none; position: absolute; top: 34px; left: 50%; transform: translateX(-50%); font-size: 10.5px; color: #aeaeb2; white-space: nowrap; }
+  .labels .cb small { display: block; }
+  .tip { position: fixed; top: 52px; left: 0; transform: translateX(-50%); background: #000; color: #fff; font-size: 12px; padding: 4px 9px; border-radius: 8px; box-shadow: 0 0 0 .5px rgba(255, 255, 255, .14); pointer-events: none; opacity: 0; transition: opacity .12s; white-space: nowrap; }
+  .tip.on { opacity: 1; }
+  .tip kbd { background: rgba(255, 255, 255, .16); color: #e5e5ea; margin-left: 6px; }
+  .mini { display: contents; }
+  .count { font-size: 15px; font-weight: 600; }
+  .txt { color: #aeaeb2; font-size: 13px; }
+  .spin { border-color: rgba(255, 255, 255, .25); border-top-color: #fff; }
+  .num { font-size: 18px; font-weight: 700; min-width: 16px; text-align: center; animation: tick 1s infinite; }
+  @keyframes tick { 0% { transform: scale(1.25); } 100% { transform: scale(1); } }
+</style></head>
+<body>
+<div class="pill" id="pill"></div><div class="tip" id="tip"></div>
+<script src="shim.js"></script><script src="common.js"></script><script src="capsule.js"></script>
+</body></html>

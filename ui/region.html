@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Choose area</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; background: transparent; overflow: hidden; cursor: crosshair; font: 14px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; user-select: none; color: #fff; }
+  #dim { position: fixed; inset: 0; background: rgba(8, 9, 14, .5); }
+  #sel { position: fixed; display: none; border: 2px solid #0a84ff; box-shadow: 0 0 0 9999px rgba(8, 9, 14, .5); border-radius: 3px; }
+  #size { position: fixed; display: none; background: #0a84ff; padding: 3px 10px; border-radius: 99px; font-weight: 600; font-size: 12.5px; transform: translate(-50%, 0); white-space: nowrap; }
+  #bar { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: rgba(20, 21, 27, .94); border: 1px solid rgba(255, 255, 255, .12); border-radius: 18px; padding: 8px 10px 8px 18px; display: flex; gap: 14px; align-items: center; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); cursor: default; }
+  #bar b { font-weight: 500; } #bar span.h { color: #aeb2c0; }
+  .ch { display: flex; gap: 4px; background: rgba(255, 255, 255, .08); padding: 3px; border-radius: 12px; }
+  .ch button { border: 0; background: none; color: #c9ccd8; padding: 6px 11px; border-radius: 9px; cursor: pointer; font: inherit; font-size: 13px; }
+  .ch button.on { background: #fff; color: #14151b; font-weight: 600; }
+  #ok { position: fixed; display: none; gap: 8px; cursor: default; }
+  #ok button { border: 0; border-radius: 12px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  #go { background: #0a84ff; color: #fff; } #re { background: rgba(20, 21, 27, .94); color: #fff; border: 1px solid rgba(255, 255, 255, .15) !important; }
+</style></head>
+<body>
+<div id="dim"></div><div id="sel"></div><div id="size"></div>
+<div id="bar"><b id="tt">Drag to choose the area</b><div class="ch" id="ch"><button data-r="0" class="on">Free</button><button data-r="1.7778">16:9</button><button data-r="0.5625">9:16</button><button data-r="1">1:1</button><button data-r="1.3333">4:3</button></div><span class="h">Enter to confirm · Esc to cancel</span></div>
+<div id="ok"><button id="go">Use this area</button><button id="re">Redraw</button></div>
+<script src="shim.js"></script><script src="common.js"></script>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const zone = q.has("zone");
+  const scale = parseFloat(q.get("scale") || window.devicePixelRatio || 1);
+  const $ = (s) => document.querySelector(s);
+  const sel = $("#sel"), size = $("#size"), ok = $("#ok"), dim = $("#dim");
+  let ratio = 0, a = null, r = null, drawing = false;
+  document.querySelectorAll("#ch button").forEach((b) => b.onclick = (e) => { e.stopPropagation(); ratio = parseFloat(b.dataset.r); document.querySelectorAll("#ch button").forEach((x) => x.classList.toggle("on", x === b)); });
+  if (zone) { $("#tt").textContent = "Drag over the area to blur, for example a chat"; $("#ch").style.display = "none"; $("#go").textContent = "Blur this area"; }
+  $("#bar").onmousedown = (e) => e.stopPropagation(); $("#ok").onmousedown = (e) => e.stopPropagation();
+  const rect = (x, y) => {
+    let w = x - a.x, h = y - a.y;
+    if (ratio) { const s = Math.max(Math.abs(w), Math.abs(h) * ratio); w = Math.sign(w || 1) * s; h = Math.sign(h || 1) * (s / ratio); }
+    let L = Math.min(a.x, a.x + w), T = Math.min(a.y, a.y + h), W = Math.abs(w), H = Math.abs(h);
+    L = Math.max(0, L); T = Math.max(0, T); W = Math.min(W, innerWidth - L); H = Math.min(H, innerHeight - T);
+    return { L, T, W, H };
+  };
+  const draw = (v) => { Object.assign(sel.style, { display: "block", left: v.L + "px", top: v.T + "px", width: v.W + "px", height: v.H + "px" }); dim.style.display = "none";
+    size.style.display = "block"; size.style.left = v.L + v.W / 2 + "px"; size.style.top = Math.min(innerHeight - 28, v.T + v.H + 8) + "px"; size.textContent = Math.round(v.W * scale) + " × " + Math.round(v.H * scale); };
+  document.addEventListener("mousedown", (e) => { if (e.button) return; ok.style.display = "none"; a = { x: e.clientX, y: e.clientY }; drawing = true; r = null; $("#bar").style.display = "none"; });
+  document.addEventListener("mousemove", (e) => { if (!drawing) return; r = rect(e.clientX, e.clientY); draw(r); });
+  document.addEventListener("mouseup", (e) => {
+    if (!drawing) return; drawing = false;
+    if (!r || r.W < 40 || r.H < 40) { sel.style.display = size.style.display = "none"; dim.style.display = "block"; $("#bar").style.display = "flex"; r = null; return; }
+    ok.style.display = "flex"; ok.style.left = Math.max(10, Math.min(innerWidth - 300, r.L + r.W - 260)) + "px"; ok.style.top = Math.min(innerHeight - 56, r.T + r.H + 40) + "px";
+  });
+  const confirm = () => { if (!r) return; const p = (v) => Math.round(v * scale); R.invoke(zone ? "zone_done" : "region_done", { x: p(r.L), y: p(r.T), w: p(r.W) & ~1, h: p(r.H) & ~1 }); };
+  $("#go").onclick = confirm;
+  $("#re").onclick = () => { ok.style.display = "none"; sel.style.display = size.style.display = "none"; dim.style.display = "block"; $("#bar").style.display = "flex"; r = null; };
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") R.invoke("region_cancel"); if (e.key === "Enter") confirm(); });
+})();
+</script></body></html>
