@@ -121,7 +121,7 @@ fn fit(src: &[u8], sw: u32, sh: u32, w: u32, h: u32) -> Vec<u8> {
 fn pacer(shared: Arc<Shared>, mut child: std::process::Child, fps: u32) {
     let Some(mut stdin) = child.stdin.take() else { return };
     let fpsf = fps.max(1) as f64;
-    let mut last: Vec<u8> = Vec::new();
+    let mut last: Vec<u8>;
     let t0;
     loop {
         if let Some(f) = shared.latest.lock().take() {
@@ -387,6 +387,7 @@ fn blur_rects(zones: &[ZoneSpec], apps: &[String], monitor_origin: (i32, i32), f
 
 fn start_tracker(shared: Arc<Shared>, zones: Vec<ZoneSpec>, apps: Vec<String>, spec_source: Source, origin: (i32, i32)) {
     let mut cache = std::collections::HashMap::new();
+    let (n_apps, n_zones) = (apps.len(), zones.len());
     let compute = move |cache: &mut std::collections::HashMap<isize, String>| -> Vec<Rect4> {
         let wins = all_windows(cache);
         let frame_origin = match &spec_source {
@@ -401,7 +402,7 @@ fn start_tracker(shared: Arc<Shared>, zones: Vec<ZoneSpec>, apps: Vec<String>, s
     };
     // the first picture must already be blurred, so the first set is computed before the capture starts
     *shared.zones.lock() = compute(&mut cache);
-    crate::diag::log(&format!("blur: {} areas now ({} apps, {} marked zones)", shared.zones.lock().len(), apps.len(), zones.len()));
+    crate::diag::log(&format!("blur: {} areas now ({} apps, {} marked zones)", shared.zones.lock().len(), n_apps, n_zones));
     std::thread::spawn(move || {
         while !shared.stop.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(100));
