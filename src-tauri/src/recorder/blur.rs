@@ -1,6 +1,14 @@
 //! Frosted "hide zone": averages a rectangle into soft blocks and then blurs the blocks together.
 //! The result keeps the colours and layout (a chat still looks like a chat) but text and faces cannot be recovered.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// 1 light, 2 medium, 3 strong. Set from the settings before a recording starts.
+static LEVEL: AtomicU8 = AtomicU8::new(1);
+pub fn set_level(l: u8) {
+    LEVEL.store(l.clamp(1, 3), Ordering::Relaxed);
+}
+
 pub type Rect4 = (i32, i32, i32, i32); // left, top, right, bottom
 
 /// The parts of `target` that nothing in `above` (windows in front of it) covers. Up to four pieces per covering window.
@@ -37,7 +45,13 @@ pub fn soften(buf: &mut [u8], w: u32, h: u32, x0: i32, y0: i32, x1: i32, y1: i32
         return;
     }
     let (rw, rh) = (x1 - x0, y1 - y0);
-    let b = (rw.min(rh) / 14).clamp(10, 26);
+    // block size and how far the blocks are blended: light keeps the look of the window, strong hides it
+    let level = LEVEL.load(Ordering::Relaxed);
+    let (b, r) = match level {
+        3 => { let b = (rw.min(rh) / 14).clamp(10, 26); (b, (b / 2).max(2)) }
+        2 => { let b = (rw.min(rh) / 24).clamp(8, 18); (b, (b / 3).max(2)) }
+        _ => { let b = (rw.min(rh) / 34).clamp(6, 12); (b, (b / 5).max(1)) }
+    };
 
     // 1. average every b x b block
     let mut by = 0;
@@ -74,7 +88,7 @@ pub fn soften(buf: &mut [u8], w: u32, h: u32, x0: i32, y0: i32, x1: i32, y1: i32
     }
 
     // 2. blur the blocks into each other (horizontal, then vertical, running sums)
-    let r = (b / 2).max(2) as isize;
+    let r = r as isize;
     let mut tmp = vec![0u8; rw * rh * 4];
     for y in 0..rh {
         for c in 0..3 {

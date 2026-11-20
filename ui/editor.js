@@ -145,11 +145,64 @@
       });
     }
 
+    // ---------------------------------------------------------------- smart tools
+    // every helper works on the pieces in source time and keeps the order
+    const rebuild = (fn) => { const out = []; for (const c of st.clips) for (const p of fn(c)) if (p.end - p.start >= 0.2) out.push({ ...p, id: uid++ }); return out; };
+    const subtract = (c, ranges) => {
+      let parts = [{ ...c }];
+      for (const [a, b] of ranges) {
+        const next = [];
+        for (const p of parts) {
+          if (b <= p.start || a >= p.end) { next.push(p); continue; }
+          if (a > p.start) next.push({ ...p, end: a });
+          if (b < p.end) next.push({ ...p, start: b });
+        }
+        parts = next;
+      }
+      return parts;
+    };
+    const cutRanges = (ranges) => { st.clips = rebuild((c) => subtract(c, ranges)); };
+    const speedRanges = (ranges, sp) => {
+      st.clips = rebuild((c) => {
+        if (c.speed !== 1) return [c];
+        const cuts = [c.start, c.end];
+        for (const [a, b] of ranges) { if (a > c.start && a < c.end) cuts.push(a); if (b > c.start && b < c.end) cuts.push(b); }
+        cuts.sort((x, y) => x - y);
+        const out = [];
+        for (let i = 0; i < cuts.length - 1; i++) {
+          const m = (cuts[i] + cuts[i + 1]) / 2, idle = ranges.some(([a, b]) => m >= a && m <= b);
+          out.push({ ...c, start: cuts[i], end: cuts[i + 1], speed: idle ? sp : 1 });
+        }
+        return out;
+      });
+    };
+    const splitTimes = (times) => { st.clips = rebuild((c) => { const ts = times.filter((t) => t > c.start + 0.3 && t < c.end - 0.3).sort((x, y) => x - y); const cuts = [c.start, ...ts, c.end]; return cuts.slice(0, -1).map((s, i) => ({ ...c, start: s, end: cuts[i + 1] })); }); };
+    async function smart(kind, btn) {
+      const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Looking…`;
+      try {
+        if (!st.an) st.an = await invoke("edit_analyze", { path: it.path });
+        const before = total(); push();
+        if (kind === "silence") {
+          const r = st.an.silences.filter(([a, b]) => b - a >= 0.8).map(([a, b]) => [a + 0.15, b - 0.15]).filter(([a, b]) => b > a);
+          if (!r.length) { hist.pop(); toast("No silent parts found"); } else { cutRanges(r); toast(`Removed ${r.length} silent ${r.length === 1 ? "part" : "parts"}, ${fmt(before - total())} shorter`); }
+        } else if (kind === "idle") {
+          const r = st.an.idle.filter(([a, b]) => b - a >= 2).map(([a, b]) => [a + 0.4, b - 0.4]).filter(([a, b]) => b > a);
+          if (!r.length) { hist.pop(); toast("The screen was never still for long"); } else { speedRanges(r, 4); toast(`Sped up ${r.length} still ${r.length === 1 ? "moment" : "moments"} to 4×, ${fmt(before - total())} shorter`); }
+        } else {
+          if (!st.an.scenes.length) { hist.pop(); toast("No clear scene changes found"); } else { splitTimes(st.an.scenes); toast(`Split into ${st.clips.length} scenes`); }
+        }
+        st.sel = 0; seek(Math.min(st.t, total())); draw();
+      } catch (err) { hist.pop(); toast(err, true); }
+      btn.disabled = false; btn.innerHTML = old;
+    }
+
     // ---------------------------------------------------------------- side panel
     function drawSide() {
       const o = st.ov.find((x) => x.id === st.selOv), c = st.clips[st.sel];
       const swatches = (cur) => COLORS.map((x) => `<button class="sw${x === cur ? " on" : ""}" data-c="${x}" style="background:${x}"></button>`).join("");
       side.innerHTML = `
+        <div class="label sm">Smart tools</div>
+        <div class="smart"><button class="sm-b" data-smart="silence"><b>Remove silences</b><span>Cuts every pause longer than a moment</span></button><button class="sm-b" data-smart="idle"><b>Speed up still screen</b><span>Fast-forwards while nothing changes</span></button><button class="sm-b" data-smart="scenes"><b>Find scenes</b><span>Splits where the picture changes</span></button></div>
         <div class="label sm">Add to the video</div>
         <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button></div>
         ${o ? `<div class="label sm">${o.kind === "text" ? "Text" : o.kind === "box" ? "Highlight" : "Blur"}</div><div class="card">
@@ -160,6 +213,7 @@
         <div class="label sm">Transition between pieces</div>
         <div class="card"><div class="tgrid" id="tr">${TRANS.map(([k, n]) => `<button data-k="${k}" class="${st.trans.kind === k ? "on" : ""}">${n}</button>`).join("")}</div>
           ${st.trans.kind !== "none" ? `<div class="row2"><span>Length</span><input type="range" id="tr-d" min="0.2" max="1.5" step="0.1" value="${st.trans.dur}"><span class="muted">${st.trans.dur}s</span></div>${st.clips.length < 2 ? `<p class="muted">Split the video to see it work.</p>` : ""}` : ""}</div>`;
+      $$("[data-smart]", side).forEach((b) => (b.onclick = () => smart(b.dataset.smart, b)));
       $$("[data-add]", side).forEach((b) => (b.onclick = () => addOverlay(b.dataset.add)));
       const t = $("#o-text", side); if (t) { t.oninput = () => { o.text = t.value; paintOverlays(); drawTl(); }; t.onfocus = push; t.onkeydown = (e) => e.stopPropagation(); }
       const sz = $("#o-size", side); if (sz) { sz.onpointerdown = push; sz.oninput = () => { o.size = +sz.value; paintOverlays(); }; }

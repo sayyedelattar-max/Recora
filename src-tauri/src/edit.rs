@@ -262,6 +262,67 @@ pub fn strip(path: &Path, work: &Path, n: u32) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// What the smart tools found in a video, all in seconds of the source.
+#[derive(serde::Serialize, Default, Debug)]
+pub struct Analysis {
+    pub silences: Vec<(f64, f64)>,
+    pub idle: Vec<(f64, f64)>,
+    pub scenes: Vec<f64>,
+}
+
+fn num_after(line: &str, key: &str) -> Option<f64> {
+    let i = line.find(key)? + key.len();
+    line[i..].trim_start().chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect::<String>().parse().ok()
+}
+
+fn pairs(text: &str, start_key: &str, end_key: &str, total: f64) -> Vec<(f64, f64)> {
+    let mut out = vec![];
+    let mut open: Option<f64> = None;
+    for line in text.lines() {
+        if let Some(s) = num_after(line, start_key) {
+            open = Some(s.max(0.0));
+        } else if let Some(e) = num_after(line, end_key) {
+            if let Some(s) = open.take() {
+                if e > s {
+                    out.push((s, e));
+                }
+            }
+        }
+    }
+    if let Some(s) = open {
+        if total > s {
+            out.push((s, total));
+        }
+    }
+    out
+}
+
+fn scene_times(text: &str) -> Vec<f64> {
+    text.lines().filter(|l| l.contains("showinfo")).filter_map(|l| num_after(l, "pts_time:")).collect()
+}
+
+/// Looks for silent stretches, a screen that does not change, and scene changes.
+pub fn analyze(path: &Path) -> Result<Analysis> {
+    let total = ffmpeg::duration(path).unwrap_or(0.0);
+    let p = path.to_string_lossy().to_string();
+    let mut a: Vec<String> = vec!["-hide_banner".into(), "-nostats".into(), "-i".into(), p.clone(), "-vf".into(), "freezedetect=n=-55dB:d=2".into()];
+    if ffmpeg::has_audio(path) {
+        a.extend(["-af".to_string(), "silencedetect=n=-35dB:d=0.8".to_string()]);
+    }
+    a.extend(["-f", "null", "-"].map(String::from));
+    let out = ffmpeg::cmd().args(&a).output()?;
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    if !out.status.success() {
+        return Err(anyhow!("analysis failed: {}", text.lines().last().unwrap_or("")));
+    }
+    let out2 = ffmpeg::cmd().args(["-hide_banner", "-nostats", "-i", &p, "-an", "-vf", "select=gt(scene\\,0.3),showinfo", "-f", "null", "-"]).output()?;
+    let mut scenes = scene_times(&String::from_utf8_lossy(&out2.stderr));
+    // keep scene changes at least 2 s apart
+    let mut last = -10.0;
+    scenes.retain(|t| { let keep = *t - last >= 2.0 && *t > 0.5; if keep { last = *t; } keep });
+    Ok(Analysis { silences: pairs(&text, "silence_start:", "silence_end:", total), idle: pairs(&text, "freeze_start:", "freeze_end:", total), scenes })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +386,27 @@ mod tests {
             let dur = ffmpeg::duration(&out).unwrap();
             assert!((dur - 4.0).abs() < 0.6, "{preset} duration {dur}");
         }
+    }
+
+    #[test]
+    fn parses_detector_output() {
+        let t = "[silencedetect @ 0x1] silence_start: 3.5\n[silencedetect @ 0x1] silence_end: 7.25 | silence_duration: 3.75\n[silencedetect @ 0x1] silence_start: 9";
+        assert_eq!(pairs(t, "silence_start:", "silence_end:", 12.0), vec![(3.5, 7.25), (9.0, 12.0)]);
+        let f = "[freezedetect @ 0x2] lavfi.freezedetect.freeze_start: 1.5\n[freezedetect @ 0x2] lavfi.freezedetect.freeze_end: 4";
+        assert_eq!(pairs(f, "freeze_start:", "freeze_end:", 5.0), vec![(1.5, 4.0)]);
+        assert_eq!(scene_times("[Parsed_showinfo_1 @ 0x3] n:   0 pts:  90 pts_time:3.0 pos: 1"), vec![3.0]);
+    }
+
+    #[test]
+    fn finds_silence_idle_and_scene() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("edit4");
+        let p = d.join("a.mp4");
+        ffmpeg::run(&["-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30:duration=3", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=4", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=3", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:d=4", "-filter_complex", "[0:v]setsar=1[a];[1:v]setsar=1[b];[a][b]concat=n=2:v=1:a=0[v];[2:a][3:a]concat=n=2:v=0:a=1[o]", "-map", "[v]", "-map", "[o]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", p.to_str().unwrap()]).unwrap();
+        let a = analyze(&p).unwrap();
+        assert!(a.silences.iter().any(|(s, e)| *s > 2.5 && *s < 3.6 && *e > 6.0), "{:?}", a.silences);
+        assert!(a.idle.iter().any(|(s, e)| *s > 2.5 && *s < 4.0 && *e > 6.0), "{:?}", a.idle);
+        assert!(a.scenes.iter().any(|t| (*t - 3.0).abs() < 0.5), "{:?}", a.scenes);
     }
 
     #[test]

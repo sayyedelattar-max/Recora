@@ -118,6 +118,22 @@ pub fn list(dir: &Path) -> Vec<Item> {
     items
 }
 
+/// An item for one file anywhere on the disk (not only the recordings folder).
+pub fn probe(path: &Path) -> Result<Item> {
+    let m = std::fs::metadata(path).map_err(|e| anyhow!("cannot open the file: {e}"))?;
+    let duration = ffmpeg::duration(path).ok_or_else(|| anyhow!("this file does not look like a video"))?;
+    Ok(Item {
+        name: path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+        markers: read_markers(path),
+        path: path.to_string_lossy().to_string(),
+        ext: path.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default(),
+        size: m.len(),
+        modified: m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0),
+        duration,
+        thumb: String::new(),
+    })
+}
+
 fn clean_name(n: &str) -> String {
     let s: String = n.chars().filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
     s.trim().trim_end_matches('.').to_string()

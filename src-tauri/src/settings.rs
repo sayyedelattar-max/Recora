@@ -52,6 +52,8 @@ pub struct Settings {
     /// apps whose windows are blurred while recording (only where they are visible); e.g. chat apps
     pub blur_apps: Vec<String>,
     pub blur_apps_on: bool,
+    /// how strongly chat apps and marked areas are blurred: 1 light, 2 medium, 3 strong
+    pub blur_level: u8,
     pub labels_left: u32, // recordings left in which the recording pill shows all labels
 }
 
@@ -81,6 +83,7 @@ impl Default for Settings {
             hide_zones_on: true,
             blur_apps: ["Zoom", "ms-teams", "Teams", "WhatsApp", "Telegram", "Slack", "Discord", "Messenger", "Signal", "Skype", "Viber", "WeChat", "Element"].iter().map(|s| s.to_string()).collect(),
             blur_apps_on: true,
+            blur_level: 1,
             labels_left: 3,
         }
     }

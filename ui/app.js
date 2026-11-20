@@ -11,7 +11,7 @@
 
   const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
   const persist = debounce(() => invoke("set_settings", { new: S }), 200);
-  const set = (k, v, rerender = true) => { S[k] = v; persist(); if (k === "theme") applyTheme(v); if (rerender) render(); if (k === "mic" || k === "out_dir") preflight(); };
+  const set = (k, v, rerender = true) => { if (k === "blur_level") v = +v; S[k] = v; persist(); if (k === "theme") applyTheme(v); if (rerender) render(); if (k === "mic" || k === "out_dir") preflight(); };
 
   // ---------------------------------------------------------------- shell
   function buildShell() {
@@ -20,7 +20,7 @@
     $("#wmin").onclick = () => win.minimize();
     $("#wmax").onclick = () => win.toggleMaximize();
     $("#wclose").onclick = () => (phase === "idle" ? win.close() : win.hide());
-    const nav = [["record", "Record", "record"], ["library", "Library", "library"], ["settings", "Settings", "settings"]];
+    const nav = [["record", "Record", "record"], ["library", "Library", "library"], ["editor", "Editor", "film"], ["settings", "Settings", "settings"]];
     $("#rail").innerHTML = `<div class="brand"><img src="logo.png" alt="">Recora</div>` + nav.map(([id, label, ic]) => `<button class="nav" data-go="${id}">${I(ic)}<span>${label}</span><i class="dot" hidden></i></button>`).join("") + `<div class="spacer"></div><button class="nav" id="open-folder">${I("folder")}<span>Open folder</span></button>`;
     $$("[data-go]").forEach((b) => (b.onclick = () => go(b.dataset.go)));
     $("#open-folder").onclick = () => invoke("open_folder").catch((e) => toast(e, true));
@@ -31,6 +31,7 @@
     $$("[data-go]").forEach((b) => b.classList.toggle("on", b.dataset.go === p));
     if (p === "library") { newClip = false; $$(".dot")[1].hidden = true; refreshLib(); }
     if (p === "record") preflight();
+    if (p === "editor") { refreshLib(); }
   }
 
   // ---------------------------------------------------------------- record page
@@ -153,7 +154,26 @@
   // ---------------------------------------------------------------- library
   async function refreshLib() {
     try { lib = await invoke("lib_list"); } catch (e) { lib = []; }
-    renderLib();
+    renderLib(); renderEditorPage();
+  }
+  // ---------------------------------------------------------------- editor page
+  const VIDEO = ["mp4", "mkv", "webm", "mov"];
+  function renderEditorPage() {
+    const root = $("#p-editor"); if (!root) return;
+    const vids = lib.filter((x) => VIDEO.includes(x.ext) && x.duration > 1);
+    root.innerHTML = `<div class="ed-page"><div class="head"><div><h1>Editor</h1></div><div class="tools"><button class="btn primary" id="ed-pick">${I("folder")}Open a video…</button></div></div>
+      <p class="muted" style="margin:-8px 0 20px">Cut, speed up, add text, highlights and blur, and let the smart tools remove silences and idle moments. The original is never changed.</p>
+      ${vids.length ? `<div class="label">Your recordings</div><div class="grid">${vids.map((x) => `<article class="clip" data-ep="${esc(x.path)}"><div class="th" ${x.thumb ? `data-th="${esc(fileUrl(x.thumb))}"` : ""}>${x.thumb ? "" : I("film")}${x.duration ? `<span class="dur">${fmt(x.duration)}</span>` : ""}</div><div class="meta"><b>${esc(x.name)}</b><span>${when(x.modified)} · ${size(x.size)}</span></div></article>`).join("")}</div>` : `<div class="empty"><b>No recordings yet</b><span>Record something, or open a video from your computer.</span></div>`}</div>`;
+    $$("[data-th]", root).forEach((n) => (n.style.backgroundImage = `url('${n.dataset.th}')`));
+    $$("[data-ep]", root).forEach((n) => (n.onclick = () => { const it = lib.find((x) => x.path === n.dataset.ep); if (it) openEditor(it, () => refreshLib()); }));
+    $("#ed-pick", root).onclick = async () => {
+      try {
+        const f = await T.dialog.open({ multiple: false, filters: [{ name: "Video", extensions: VIDEO }] });
+        if (!f) return;
+        const it = await invoke("edit_probe", { path: Array.isArray(f) ? f[0] : f });
+        openEditor(it, () => refreshLib());
+      } catch (e) { toast(e, true); }
+    };
   }
   function renderLib() {
     const q = libQ.trim().toLowerCase();
@@ -212,6 +232,7 @@
       const saved = (S.blur_apps || []).filter((a) => !openKeys.has(normP(a)));
       const tick = (on) => `<span class="tick ${on ? "on" : ""}">${on ? I("check") : ""}</span>`;
       el.innerHTML = `<div class="modal apppick"><div class="ap-head"><div><h3>Apps to blur</h3><p class="muted">Their windows are blurred in the recording, only where you can see them. Windows in front of them stay clear.</p></div><button class="close-x flat" id="bx">${I("x")}</button></div>
+        <div class="ap-tools" style="padding-bottom:0"><span class="muted" style="align-self:center">Strength</span>${segHtml("blur_level", [[1, "Light"], [2, "Medium"], [3, "Strong"]], true)}</div>
         <div class="ap-tools"><label class="search">${I("search")}<input id="bq" placeholder="Search open apps" value="${esc(q)}" autocomplete="off"></label><button class="btn" id="brf">Refresh</button></div>
         <div class="ap-body">
           <div class="label sm">Open now</div>
@@ -220,6 +241,7 @@
         </div>
         <div class="ap-foot muted">Apps in a web browser (WhatsApp Web, for example) are part of the browser window, so choosing the browser would blur every tab.</div></div>`;
       $("#bx", el).onclick = close;
+      $$("[data-seg=blur_level] button", el).forEach((b) => (b.onclick = () => { S.blur_level = +b.dataset.v; persist(); draw(); }));
       const inp = $("#bq", el); inp.oninput = () => { q = inp.value; const p = inp.selectionStart; draw(); const n = $("#bq", el); n.focus(); n.setSelectionRange(p, p); };
       $("#brf", el).onclick = async () => { SRC = await invoke("get_sources"); draw(); };
       $$(".app", el).forEach((b) => (b.onclick = () => toggle(b.dataset.n, b.dataset.k)));
@@ -387,6 +409,7 @@
         <div class="label">Privacy</div>
         <div class="group">
           <div class="row"><div class="t"><b>Blur chat apps</b><span>${blurLine()}</span></div><button class="btn sm" id="pick-blur2">Choose apps…</button><button class="switch ${S.blur_apps_on ? "on" : ""}" data-sw="blur_apps_on" role="switch" aria-checked="${!!S.blur_apps_on}"></button></div>
+          ${segRow("Blur strength", "blur_level", [[1, "Light"], [2, "Medium"], [3, "Strong"]])}
         </div>
         <p class="foot">Text becomes unreadable and pictures unclear. The windows keep their look.</p>
         <div class="label">Marked areas (advanced)</div>

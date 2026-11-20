@@ -53,6 +53,7 @@ fn set_settings(app: AppHandle, state: State<AppState>, new: Settings) -> R<()> 
         let old = state.settings.lock();
         old.hotkey_toggle != new.hotkey_toggle || old.hotkey_pause != new.hotkey_pause || old.hotkey_marker != new.hotkey_marker
     };
+    recorder::blur::set_level(new.blur_level);
     new.save(&state.settings_path);
     *state.settings.lock() = new;
     if hotkeys_changed {
@@ -150,6 +151,7 @@ fn add_zones(app: &AppHandle, s: &Settings, spec: &mut CaptureSpec) {
     if let Some(m) = tauri_monitor(app, mon) {
         spec.origin = (m.position().x, m.position().y);
     }
+    recorder::blur::set_level(s.blur_level);
     if s.blur_apps_on {
         let mut skip = String::new(); // the app being recorded is never blurred
         if let Source::Window { hwnd } = &spec.source {
@@ -646,6 +648,15 @@ async fn edit_strip(state: State<'_, AppState>, path: String, n: u32) -> R<Strin
     tauri::async_runtime::spawn_blocking(move || edit::strip(Path::new(&path), &work, n.clamp(4, 40)).map(|p| p.to_string_lossy().to_string()).map_err(e2s)).await.map_err(e2s)?
 }
 #[tauri::command]
+async fn edit_analyze(path: String) -> R<edit::Analysis> {
+    tauri::async_runtime::spawn_blocking(move || edit::analyze(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
+}
+/// Basic facts about any video the person picks, so the editor can open it without the library.
+#[tauri::command]
+async fn edit_probe(path: String) -> R<library::Item> {
+    tauri::async_runtime::spawn_blocking(move || library::probe(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
+}
+#[tauri::command]
 fn reveal(path: String) -> R<()> {
     tauri_plugin_opener::reveal_item_in_dir(path).map_err(e2s)
 }
@@ -752,7 +763,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_analyze, edit_probe, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())

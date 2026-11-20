@@ -257,3 +257,14 @@ kbd { font: 500 11.5px var(--sans); background: var(--fill); padding: 1px 6px; b
 .ph2 { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: 12px; background: #ff3b30; pointer-events: none; z-index: 5; }
 .ph2::before { content: ""; position: absolute; top: 0; left: -5px; width: 12px; height: 12px; background: #ff3b30; border-radius: 3px 3px 6px 6px; }
 @media (max-width: 900px) { .ed-main { grid-template-columns: 1fr; } .ed-side { display: none; } }
+
+.smart { display: flex; flex-direction: column; gap: 6px; }
+.sm-b { text-align: left; padding: 9px 12px; border-radius: var(--r-sm); background: var(--accent-soft); display: flex; flex-direction: column; gap: 1px; transition: filter .12s; }
+.sm-b:hover { filter: brightness(.96); }
+.sm-b b { color: var(--accent); font-weight: 600; }
+.sm-b span { color: var(--muted); font-size: 12px; }
+.sm-b:disabled { opacity: .6; pointer-events: none; }
+.ed-page { max-width: 980px; }
+.ed-side .seg button { padding: 0 9px; }
+.ed-side #sp { flex: 1; justify-content: flex-end; }
+.toast + .toast { bottom: 70px; }
