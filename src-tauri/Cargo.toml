@@ -26,6 +26,7 @@ cpal = "0.15"
 hound = "3.5"
 trash = "5"
 fs2 = "0.4"
+ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-capture = "2.0.1"
