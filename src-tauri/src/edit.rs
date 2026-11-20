@@ -301,19 +301,31 @@ fn scene_times(text: &str) -> Vec<f64> {
     text.lines().filter(|l| l.contains("showinfo")).filter_map(|l| num_after(l, "pts_time:")).collect()
 }
 
+/// Pauses and still-screen only, on a shrunken picture and at low priority. This is what the autopilot runs in the background.
+pub fn analyze_quick(path: &Path) -> Result<Analysis> {
+    detect(path, false)
+}
+
 /// Looks for silent stretches, a screen that does not change, and scene changes.
 pub fn analyze(path: &Path) -> Result<Analysis> {
+    detect(path, true)
+}
+
+fn detect(path: &Path, scenes_too: bool) -> Result<Analysis> {
     let total = ffmpeg::duration(path).unwrap_or(0.0);
     let p = path.to_string_lossy().to_string();
-    let mut a: Vec<String> = vec!["-hide_banner".into(), "-nostats".into(), "-i".into(), p.clone(), "-vf".into(), "freezedetect=n=-55dB:d=2".into()];
+    let mut a: Vec<String> = vec!["-hide_banner".into(), "-nostats".into(), "-i".into(), p.clone(), "-vf".into(), "scale=320:-2,freezedetect=n=-55dB:d=2".into()];
     if ffmpeg::has_audio(path) {
         a.extend(["-af".to_string(), "silencedetect=n=-35dB:d=0.8".to_string()]);
     }
     a.extend(["-f", "null", "-"].map(String::from));
-    let out = ffmpeg::cmd().args(&a).output()?;
+    let out = if scenes_too { ffmpeg::cmd() } else { ffmpeg::cmd_low() }.args(&a).output()?;
     let text = String::from_utf8_lossy(&out.stderr).to_string();
     if !out.status.success() {
         return Err(anyhow!("analysis failed: {}", text.lines().last().unwrap_or("")));
+    }
+    if !scenes_too {
+        return Ok(Analysis { silences: pairs(&text, "silence_start:", "silence_end:", total), idle: pairs(&text, "freeze_start:", "freeze_end:", total), scenes: vec![] });
     }
     let out2 = ffmpeg::cmd().args(["-hide_banner", "-nostats", "-i", &p, "-an", "-vf", "select=gt(scene\\,0.3),showinfo", "-f", "null", "-"]).output()?;
     let mut scenes = scene_times(&String::from_utf8_lossy(&out2.stderr));
@@ -403,6 +415,8 @@ mod tests {
         let d = tempfile_dir("edit4");
         let p = d.join("a.mp4");
         ffmpeg::run(&["-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30:duration=3", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=4", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=3", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:d=4", "-filter_complex", "[0:v]setsar=1[a];[1:v]setsar=1[b];[a][b]concat=n=2:v=1:a=0[v];[2:a][3:a]concat=n=2:v=0:a=1[o]", "-map", "[v]", "-map", "[o]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", p.to_str().unwrap()]).unwrap();
+        let q = analyze_quick(&p).unwrap();
+        assert!(q.scenes.is_empty() && q.silences.iter().any(|(s, _)| *s > 2.5) && q.idle.iter().any(|(s, _)| *s > 2.5), "{:?}", q);
         let a = analyze(&p).unwrap();
         assert!(a.silences.iter().any(|(s, e)| *s > 2.5 && *s < 3.6 && *e > 6.0), "{:?}", a.silences);
         assert!(a.idle.iter().any(|(s, e)| *s > 2.5 && *s < 4.0 && *e > 6.0), "{:?}", a.idle);

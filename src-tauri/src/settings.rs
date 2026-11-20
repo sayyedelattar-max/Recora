@@ -54,6 +54,12 @@ pub struct Settings {
     pub blur_apps_on: bool,
     /// how strongly chat apps and marked areas are blurred: 1 light, 2 medium, 3 strong
     pub blur_level: u8,
+    /// what happens after a recording is saved: off | suggest | auto
+    pub autopilot: String,
+    /// optional assistant: provider (anthropic | openai), the person's own key, and an optional model name
+    pub ai_provider: String,
+    pub ai_key: String,
+    pub ai_model: String,
     pub labels_left: u32, // recordings left in which the recording pill shows all labels
 }
 
@@ -84,6 +90,10 @@ impl Default for Settings {
             blur_apps: ["Zoom", "ms-teams", "Teams", "WhatsApp", "Telegram", "Slack", "Discord", "Messenger", "Signal", "Skype", "Viber", "WeChat", "Element"].iter().map(|s| s.to_string()).collect(),
             blur_apps_on: true,
             blur_level: 1,
+            autopilot: "suggest".into(),
+            ai_provider: "anthropic".into(),
+            ai_key: String::new(),
+            ai_model: String::new(),
             labels_left: 3,
         }
     }

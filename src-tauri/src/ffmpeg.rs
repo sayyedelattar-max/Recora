@@ -26,6 +26,15 @@ pub fn cmd() -> Command {
     c
 }
 
+/// Same, but at lower priority so a background check never slows a recording or the editor.
+pub fn cmd_low() -> Command {
+    let mut c = Command::new(bin());
+    c.stdin(Stdio::null());
+    #[cfg(windows)]
+    c.creation_flags(0x0800_0000 | 0x0000_4000); // CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+    c
+}
+
 pub fn available() -> bool {
     cmd().arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
 }

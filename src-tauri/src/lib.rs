@@ -1,5 +1,6 @@
 mod apps;
 mod diag;
+mod ai;
 mod edit;
 mod ffmpeg;
 mod library;
@@ -653,8 +654,33 @@ async fn edit_analyze(path: String) -> R<edit::Analysis> {
 }
 /// Basic facts about any video the person picks, so the editor can open it without the library.
 #[tauri::command]
+async fn edit_analyze_quick(path: String) -> R<edit::Analysis> {
+    tauri::async_runtime::spawn_blocking(move || edit::analyze_quick(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
+}
+#[tauri::command]
 async fn edit_probe(path: String) -> R<library::Item> {
     tauri::async_runtime::spawn_blocking(move || library::probe(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
+}
+#[tauri::command]
+async fn ai_edit(state: State<'_, AppState>, instruction: String, facts: ai::Facts) -> R<ai::Reply> {
+    let (p, k, m) = { let s = state.settings.lock(); (s.ai_provider.clone(), s.ai_key.clone(), s.ai_model.clone()) };
+    tauri::async_runtime::spawn_blocking(move || ai::edit(&p, &k, &m, &instruction, &facts).map_err(e2s)).await.map_err(e2s)?
+}
+#[tauri::command]
+async fn ai_test(provider: String, key: String, model: String) -> R<()> {
+    tauri::async_runtime::spawn_blocking(move || ai::test(&provider, &key, &model).map_err(e2s)).await.map_err(e2s)?
+}
+#[tauri::command]
+fn ai_estimate(instruction: String, facts: ai::Facts) -> u64 {
+    ai::estimate_tokens(&instruction, &facts)
+}
+/// Opens a help page in the browser. Only https links are allowed.
+#[tauri::command]
+fn open_url(url: String) -> R<()> {
+    if !url.starts_with("https://") {
+        return Err("Only https links can be opened".into());
+    }
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(e2s)
 }
 #[tauri::command]
 fn reveal(path: String) -> R<()> {
@@ -763,7 +789,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_analyze, edit_probe, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_analyze, edit_analyze_quick, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())

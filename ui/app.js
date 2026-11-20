@@ -13,6 +13,14 @@
   const persist = debounce(() => invoke("set_settings", { new: S }), 200);
   const set = (k, v, rerender = true) => { if (k === "blur_level") v = +v; S[k] = v; persist(); if (k === "theme") applyTheme(v); if (rerender) render(); if (k === "mic" || k === "out_dir") preflight(); };
 
+  window.__ai = () => !!(S && S.ai_key);
+  window.__S = () => S;
+  window.__closeClip = () => closeClip();
+  window.__refreshLib = () => refreshLib();
+  window.__goSettings = () => go("settings");
+  // the browser's own right-click menu (Back, Refresh, Print) does not belong in an app
+  document.addEventListener("contextmenu", (e) => { if (!/INPUT|TEXTAREA/.test(e.target.tagName)) e.preventDefault(); });
+
   // ---------------------------------------------------------------- shell
   function buildShell() {
     const win = T.window.getCurrentWindow();
@@ -117,7 +125,7 @@
       </div>
       <div class="label">Privacy</div>
       <div class="group">
-        <div class="row"><div class="ic" style="--c:#5856d6">${I("shield")}</div><div class="t"><b>Blur chat apps</b><span>${blurLine()}</span></div><button class="btn sm" id="pick-blur">Choose apps…</button><button class="switch ${S.blur_apps_on ? "on" : ""}" data-sw="blur_apps_on" role="switch" aria-checked="${!!S.blur_apps_on}" aria-label="Blur chat apps"></button></div>
+        <div class="row"><div class="ic" style="--c:#5856d6">${I("shield")}</div><div class="t"><b>Blur chat apps</b><span>${blurLine()} <a class="lnk" id="blur-flip">${S.blur_apps_on ? "Show them instead" : "Blur them"}</a></span></div><button class="btn sm" id="pick-blur">Choose apps…</button><button class="switch ${S.blur_apps_on ? "on" : ""}" data-sw="blur_apps_on" role="switch" aria-checked="${!!S.blur_apps_on}" aria-label="Blur chat apps"></button></div>
       </div>
       <div class="label">Start</div>
       <div class="group">
@@ -142,6 +150,7 @@
     const md = $("#mic-dev", root); if (md) md.onchange = () => set("mic_device", md.value, false);
     const dr = $("#draw-region", root); if (dr) dr.onclick = () => invoke("pick_region").catch((e) => toast(e, true));
     $("#pick-blur", root).onclick = openBlurPicker;
+    $("#blur-flip", root).onclick = (e) => { e.stopPropagation(); set("blur_apps_on", !S.blur_apps_on); toast(S.blur_apps_on ? "Chat apps will be blurred" : "Chat apps will be recorded as they are"); };
     $("#go-rec", root).onclick = async () => {
       try { await invoke("start_recording"); } catch (e) { toast(e, true); }
     };
@@ -166,6 +175,7 @@
       ${vids.length ? `<div class="label">Your recordings</div><div class="grid">${vids.map((x) => `<article class="clip" data-ep="${esc(x.path)}"><div class="th" ${x.thumb ? `data-th="${esc(fileUrl(x.thumb))}"` : ""}>${x.thumb ? "" : I("film")}${x.duration ? `<span class="dur">${fmt(x.duration)}</span>` : ""}</div><div class="meta"><b>${esc(x.name)}</b><span>${when(x.modified)} · ${size(x.size)}</span></div></article>`).join("")}</div>` : `<div class="empty"><b>No recordings yet</b><span>Record something, or open a video from your computer.</span></div>`}</div>`;
     $$("[data-th]", root).forEach((n) => (n.style.backgroundImage = `url('${n.dataset.th}')`));
     $$("[data-ep]", root).forEach((n) => (n.onclick = () => { const it = lib.find((x) => x.path === n.dataset.ep); if (it) openEditor(it, () => refreshLib()); }));
+    if (window.autopilot) autopilot.renderPage();
     $("#ed-pick", root).onclick = async () => {
       try {
         const f = await T.dialog.open({ multiple: false, filters: [{ name: "Video", extensions: VIDEO }] });
@@ -246,6 +256,29 @@
       $("#brf", el).onclick = async () => { SRC = await invoke("get_sources"); draw(); };
       $$(".app", el).forEach((b) => (b.onclick = () => toggle(b.dataset.n, b.dataset.k)));
     }
+    draw();
+  }
+
+
+  // ---------------------------------------------------------------- AI key help
+  function openAiHelp() {
+    const guides = {
+      anthropic: { name: "Claude (Anthropic)", url: "https://console.anthropic.com/settings/keys", steps: ["Open console.anthropic.com and sign in or create an account.", "Go to Settings, then Billing, and add a small credit such as 5 dollars. A chat subscription does not include this; the API is paid per use.", "Go to API keys and press Create key. Name it Recora.", "Copy the key (it starts with sk-ant-) and paste it in Recora's settings. You will not be able to see it again, so keep a copy."] },
+      openai: { name: "OpenAI", url: "https://platform.openai.com/api-keys", steps: ["Open platform.openai.com and sign in or create an account.", "Go to Billing and add a small credit such as 5 dollars. A ChatGPT subscription does not include this; the API is paid per use.", "Go to API keys and press Create new secret key. Name it Recora.", "Copy the key (it starts with sk-) and paste it in Recora's settings. You will not be able to see it again, so keep a copy."] },
+    };
+    const el = document.createElement("div"); el.className = "veil"; document.body.appendChild(el);
+    const draw = () => {
+      const g = guides[S.ai_provider] || guides.anthropic;
+      el.innerHTML = `<div class="modal"><div class="ap-head"><div><h3>Get a key for ${g.name}</h3><p class="muted">The key is a password that lets Recora ask the AI on your account. You pay the provider directly, only for what you use.</p></div><button class="close-x flat" id="hx">${I("x")}</button></div>
+        <div class="ap-tools" style="padding-bottom:0">${segHtml("ai_provider", [["anthropic", "Claude"], ["openai", "OpenAI"]], true)}</div>
+        <ol class="steps">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>
+        <div class="ap-foot"><b>What it costs.</b> Each request sends about 600 to 1,500 tokens and gets about 300 back. With the low-cost models that is usually a fraction of a cent, so 5 dollars lasts for hundreds of requests. Check your provider's current prices.</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:0 20px 18px"><button class="btn" id="hc">Close</button><button class="btn primary" id="ho">Open the key page</button></div></div>`;
+      $("#hx", el).onclick = $("#hc", el).onclick = () => { el.remove(); renderSettings(); };
+      $("#ho", el).onclick = () => invoke("open_url", { url: g.url }).catch((e) => toast(e, true));
+      $$("[data-seg=ai_provider] button", el).forEach((b) => (b.onclick = () => { S.ai_provider = b.dataset.v; persist(); draw(); }));
+    };
+    el.addEventListener("mousedown", (e) => { if (e.target === el) { el.remove(); renderSettings(); } });
     draw();
   }
 
@@ -412,6 +445,17 @@
           ${segRow("Blur strength", "blur_level", [[1, "Light"], [2, "Medium"], [3, "Strong"]])}
         </div>
         <p class="foot">Text becomes unreadable and pictures unclear. The windows keep their look.</p>
+        <div class="label">Autopilot</div>
+        <div class="group">${segRow("When a recording is saved", "autopilot", [["off", "Do nothing"], ["suggest", "Suggest"], ["auto", "Polish for me"]])}</div>
+        <p class="foot">Suggest shows one quiet note when an edit would clearly save time, and only then. Polish for me makes a tightened copy by itself and never changes the original.</p>
+        <div class="label">AI assistant (optional)</div>
+        <div class="group">
+          <div class="row"><div class="t"><b>Provider</b></div>${segHtml("ai_provider", [["anthropic", "Claude"], ["openai", "OpenAI"]], true)}</div>
+          <div class="row"><div class="t"><b>API key</b><span>Stored on this computer only</span></div><input type="password" id="ai-key" class="txt" placeholder="Paste your key" value="${esc(S.ai_key || "")}" autocomplete="off" spellcheck="false"><button class="btn sm" id="ai-test">Test</button></div>
+          <div class="row"><div class="t"><b>Model</b><span>Leave empty to use the low-cost default</span></div><input id="ai-model" class="txt" placeholder="${S.ai_provider === "openai" ? "gpt-4o-mini" : "claude-haiku-5-5"}" value="${esc(S.ai_model || "")}" autocomplete="off" spellcheck="false"></div>
+          <div class="row"><div class="t"><b>Don't have a key?</b><span>Step by step, about two minutes</span></div><button class="btn sm" id="ai-help">Show me how</button></div>
+        </div>
+        <p class="foot">Everything works without it. With a key, you can type a sentence such as “remove the first 10 seconds and speed up the boring parts” and the editor prepares the edits for you to review. It never receives your video or sound, only the length and the times of pauses and scene changes: roughly 600 to 1,500 tokens a request, usually a fraction of a cent.</p>
         <div class="label">Marked areas (advanced)</div>
         <div class="group">
           ${row("", "Blur marked areas while recording", "A fixed part of the screen, whatever is shown there", "hide_zones_on")}
@@ -422,6 +466,14 @@
         <p class="foot" style="margin-top:28px">Recora 2.0 · LocMasters</p>
       </div>`;
     $("#pick-blur2").onclick = openBlurPicker;
+    $("#ai-key").oninput = (e) => { S.ai_key = e.target.value.trim(); persist(); };
+    $("#ai-model").oninput = (e) => { S.ai_model = e.target.value.trim(); persist(); };
+    $("#ai-help").onclick = openAiHelp;
+    $("#ai-test").onclick = async (e) => {
+      const b = e.currentTarget; b.disabled = true; b.textContent = "Testing…";
+      try { await invoke("ai_test", { provider: S.ai_provider, key: S.ai_key || "", model: S.ai_model || "" }); toast("The key works"); } catch (err) { toast(err, true); }
+      b.disabled = false; b.textContent = "Test";
+    };
     $("#add-zone").onclick = () => invoke("pick_zone").catch((e) => toast(e, true));
     $("#hk-reset").onclick = () => { S.hotkey_toggle = "F9"; S.hotkey_pause = "F10"; S.hotkey_marker = "F8"; persist(); renderSettings(); renderRecord(); };
     $$("[data-zon]").forEach((b) => (b.onclick = () => { const z = S.hide_zones.find((x) => String(x.id) === b.dataset.zon); if (z) { z.on = !z.on; persist(); renderSettings(); renderRecord(); } }));
@@ -465,6 +517,7 @@
       const it = lib.find((x) => x.path === rep.path);
       if (it) { it.markers = rep.markers && rep.markers.length ? rep.markers : it.markers; openClip(it, { fresh: true, notes: rep.notes }); }
       else if (rep.notes && rep.notes.length) toast(rep.notes[0], true);
+      if (it && window.autopilot) autopilot.onSaved(it);
     });
     listen("rec:note", (m) => toast(m));
     listen("rec:cancelled", () => { toast("Recording discarded"); });
