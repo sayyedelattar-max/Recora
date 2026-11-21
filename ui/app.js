@@ -176,7 +176,7 @@
     $$("[data-th]", root).forEach((n) => (n.style.backgroundImage = `url('${n.dataset.th}')`));
     $$("[data-ep]", root).forEach((n) => (n.onclick = () => { const it = lib.find((x) => x.path === n.dataset.ep); if (it) openEditor(it, () => refreshLib()); }));
     if (window.autopilot) autopilot.renderPage();
-    $("#ed-pick", root).onclick = async () => {
+    window.__pickVideo = $("#ed-pick", root).onclick = async () => {
       try {
         const f = await T.dialog.open({ multiple: false, filters: [{ name: "Video", extensions: VIDEO }] });
         if (!f) return;

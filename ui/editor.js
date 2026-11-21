@@ -32,7 +32,7 @@
 
     const el = document.createElement("div");
     el.className = "ed"; el.id = "editor";
-    el.innerHTML = `<div class="ed-top"><button class="btn sm" id="ed-x">${I("x")}Close</button><div class="ed-title" id="ed-title"></div><span class="grow"></span><div class="seg fit" id="ed-pre">${PRESETS.map(([k, n]) => `<button data-k="${k}">${n}</button>`).join("")}</div><button class="btn primary" id="ed-go">Export</button></div>
+    el.innerHTML = `<div class="ed-mb" id="mb">${["File", "Edit", "Clip", "Add", "Tools", "View", "Help"].map((n) => `<button data-m="${n}">${n}</button>`).join("")}</div><div class="ed-top"><button class="btn sm" id="ed-x">${I("x")}Close</button><div class="ed-title" id="ed-title"></div><span class="grow"></span><div class="seg fit" id="ed-pre">${PRESETS.map(([k, n]) => `<button data-k="${k}">${n}</button>`).join("")}</div><button class="btn primary" id="ed-go">Export</button></div>
       <div class="ed-main">
         <div class="ed-stage"><div class="ed-frame" id="frame"><video id="ev" src="${fileUrl(it.path)}" preload="auto" playsinline></video><div class="ed-ovl" id="ovl"></div></div></div>
         <aside class="ed-side" id="side"></aside>
@@ -499,6 +499,30 @@
     }, true);
     el.addEventListener("pointerdown", (e) => { if (!e.target.closest(".ctx")) closeMenu(); }, true);
     el.addEventListener("wheel", closeMenu, { passive: true });
+
+    // ---------------------------------------------------------------- menu bar
+    const CUT_FOCUS = () => { const t = $("#cut-t", side); if (t) { t.scrollIntoView({ block: "center" }); t.focus(); } };
+    function shortcuts() {
+      const v = document.createElement("div"); v.className = "veil rcp"; el.appendChild(v);
+      const rows = [["Space", "Play or pause"], ["S", "Split at the playhead"], ["Delete", "Delete the selected piece or item"], ["Ctrl + Z", "Undo"], ["← →", "One frame back or forward"], ["Shift + ← →", "Five seconds"], ["Right-click", "More options for what is under the pointer"], ["Esc", "Close a menu, then the editor"]];
+      v.innerHTML = `<div class="modal rmodal"><div class="ap-head"><div><h3>Keyboard shortcuts</h3></div><button class="close-x flat" id="kx">${I("x")}</button></div><div class="krows">${rows.map(([k, d]) => `<div><kbd>${k}</kbd><span>${d}</span></div>`).join("")}</div></div>`;
+      const c = () => v.remove(); $("#kx", v).onclick = c; v.addEventListener("mousedown", (ev) => { if (ev.target === v) c(); });
+    }
+    const menuDefs = () => ({
+      File: [{ label: "Open another video…", fn: () => { closeEditor(); window.__pickVideo && window.__pickVideo(); } }, { label: "Export", key: "", fn: go }, { label: "Export as", sub: PRESETS.map(([k, n]) => ({ label: n, fn: () => { st.preset = k; draw(); go(); } })) }, "-", { label: "Close editor", key: "Esc", fn: closeEditor }],
+      Edit: [{ label: "Undo", key: "Ctrl+Z", off: !hist.length, fn: undo }, "-", { label: "Split at the playhead", key: "S", fn: split }, { label: "Delete selected", key: "Del", fn: del }, "-", { label: "Delete everything before the playhead", fn: () => trimHere("before") }, { label: "Delete everything after the playhead", fn: () => trimHere("after") }],
+      Clip: [{ label: "Duplicate", off: st.sel < 0, fn: () => dupClip(st.sel) }, { label: "Speed", off: st.sel < 0, sub: st.sel >= 0 ? speedItems(st.clips[st.sel]) : [] }, { label: "Move left", off: st.sel <= 0, fn: () => moveClip(st.sel, -1) }, { label: "Move right", off: st.sel < 0 || st.sel >= st.clips.length - 1, fn: () => moveClip(st.sel, 1) }, "-", { label: "Transition between pieces", sub: TRANS.map(([k, n]) => ({ label: n + (st.trans.kind === k ? "  ✓" : ""), fn: () => { push(); st.trans.kind = k; draw(); } })) }],
+      Add: [{ label: "Text", fn: () => addOverlay("text") }, { label: "Highlight box", fn: () => addOverlay("box") }, { label: "Blur area", fn: () => addOverlay("blur") }],
+      Tools: [{ label: "Quick clean-up", fn: () => cleanup($("#quick", side)) }, { label: "Recipes…", fn: () => openRecipes() }, "-", { label: "Remove silences", fn: () => smart("silence", $("[data-smart=silence]", side)) }, { label: "Speed up still screen", fn: () => smart("idle", $("[data-smart=idle]", side)) }, { label: "Find scenes", fn: () => smart("scenes", $("[data-smart=scenes]", side)) }, "-", { label: "Cut by time…", fn: CUT_FOCUS }, { label: "Ask the AI…", fn: () => { const q = $("#ai-q", side); if (q) { q.scrollIntoView({ block: "center" }); q.focus(); } else toast("Add your API key in Settings to use this") } }],
+      View: [{ label: "Fit the timeline", fn: () => { st.zoom = 1; $("#b-zoom", el).value = 1; drawTl(); } }, { label: "Zoom in", fn: () => { st.zoom = Math.min(8, st.zoom * 1.5); $("#b-zoom", el).value = st.zoom; drawTl(); } }, { label: "Zoom out", fn: () => { st.zoom = Math.max(1, st.zoom / 1.5); $("#b-zoom", el).value = st.zoom; drawTl(); } }],
+      Help: [{ label: "Keyboard shortcuts", fn: shortcuts }, { label: "Right-click anywhere for more options", off: true, fn: () => {} }],
+    });
+    $$("#mb button", el).forEach((b) => {
+      const open = () => { $$("#mb button", el).forEach((x) => x.classList.toggle("on", x === b)); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom + 2, menuDefs()[b.dataset.m]); };
+      b.onclick = (ev) => { ev.stopPropagation(); if (b.classList.contains("on") && $(".ctx", el)) { closeMenu(); b.classList.remove("on"); } else open(); };
+      b.onmouseenter = () => { if ($(".ctx", el) && $$("#mb button.on", el).length && !b.classList.contains("on")) open(); };
+    });
+    el.addEventListener("pointerdown", (ev) => { if (!ev.target.closest("#mb")) $$("#mb button.on", el).forEach((x) => x.classList.remove("on")); }, true);
 
     // ---------------------------------------------------------------- wiring
     function paint() { $("#b-time", el).textContent = `${fmt(st.t)} / ${fmt(total())}`; paintHead(); paintOverlays(); }
