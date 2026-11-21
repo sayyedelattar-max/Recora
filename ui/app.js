@@ -15,6 +15,8 @@
 
   window.__ai = () => !!(S && S.ai_key);
   window.__S = () => S;
+  window.__lib = () => lib;
+  window.__goPage = (p) => go(p);
   window.__closeClip = () => closeClip();
   window.__refreshLib = () => refreshLib();
   window.__goSettings = () => go("settings");
@@ -28,7 +30,7 @@
     $("#wmin").onclick = () => win.minimize();
     $("#wmax").onclick = () => win.toggleMaximize();
     $("#wclose").onclick = () => (phase === "idle" ? win.close() : win.hide());
-    const nav = [["record", "Record", "record"], ["library", "Library", "library"], ["editor", "Editor", "film"], ["settings", "Settings", "settings"]];
+    const nav = [["record", "Record", "record"], ["library", "Library", "library"], ["editor", "Editor", "film"], ["studio", "Studio", "studio"], ["settings", "Settings", "settings"]];
     $("#rail").innerHTML = `<div class="brand"><img src="logo.png" alt="">Recora</div>` + nav.map(([id, label, ic]) => `<button class="nav" data-go="${id}">${I(ic)}<span>${label}</span><i class="dot" hidden></i></button>`).join("") + `<div class="spacer"></div><button class="nav" id="open-folder">${I("folder")}<span>Open folder</span></button>`;
     $$("[data-go]").forEach((b) => (b.onclick = () => go(b.dataset.go)));
     $("#open-folder").onclick = () => invoke("open_folder").catch((e) => toast(e, true));
@@ -40,6 +42,7 @@
     if (p === "library") { newClip = false; $$(".dot")[1].hidden = true; refreshLib(); }
     if (p === "record") preflight();
     if (p === "editor") { refreshLib(); }
+    if (p === "studio") { refreshLib(); window.studio && studio.render($("#p-studio")); }
   }
 
   // ---------------------------------------------------------------- record page
@@ -515,6 +518,7 @@
       newClip = true; $$(".dot")[1].hidden = false;
       await refreshLib();
       const it = lib.find((x) => x.path === rep.path);
+      if (it && window.studio && studio.onSaved(it)) return;
       if (it) { it.markers = rep.markers && rep.markers.length ? rep.markers : it.markers; openClip(it, { fresh: true, notes: rep.notes }); }
       else if (rep.notes && rep.notes.length) toast(rep.notes[0], true);
       if (it && window.autopilot) autopilot.onSaved(it);

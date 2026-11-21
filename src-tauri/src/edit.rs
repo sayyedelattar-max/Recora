@@ -42,6 +42,15 @@ pub struct Overlay {
     pub size: f64,
     #[serde(default)]
     pub color: String,
+    /// blur strength 1 to 3 (block size 8, 14, 24); 0 means the middle one
+    #[serde(default)]
+    pub level: u8,
+    /// a dark box behind text; on unless the editor turns it off
+    #[serde(default = "yes")]
+    pub bg: bool,
+}
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -104,11 +113,11 @@ fn text_file(dir: &Path, i: usize, t: &str) -> Result<String> {
     Ok(esc_path(&p.to_string_lossy()))
 }
 
-fn esc_path(s: &str) -> String {
+pub(crate) fn esc_path(s: &str) -> String {
     s.replace('\\', "/").replace(':', "\\:").replace('\'', "\\'")
 }
 
-fn font_file() -> Option<String> {
+pub(crate) fn font_file() -> Option<String> {
     let cands = [
         "C:/Windows/Fonts/segoeui.ttf",
         "C:/Windows/Fonts/tahoma.ttf",
@@ -183,16 +192,17 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
                 let tf = text_file(tmp, i, &o.text)?;
                 let size = if o.size > 0.0 { o.size } else { 0.06 };
                 let ff = font.as_ref().map(|x| format!("fontfile='{x}':")).unwrap_or_default();
-                g.push(format!("[{cur_v}]drawtext={ff}textfile='{tf}':fontsize=h*{}:fontcolor={}:box=1:boxcolor=black@0.55:boxborderw=14:x=w*{}:y=h*{}:{en}[{next}]", f(size), colour(&o.color), f(o.x), f(o.y)));
+                g.push(format!("[{cur_v}]drawtext={ff}textfile='{tf}':fontsize=h*{}:fontcolor={}:box={}:boxcolor=black@0.55:boxborderw=14:x=w*{}:y=h*{}:{en}[{next}]", f(size), colour(&o.color), if o.bg { 1 } else { 0 }, f(o.x), f(o.y)));
             }
             "box" => {
                 g.push(format!("[{cur_v}]drawbox=x=iw*{}:y=ih*{}:w=iw*{}:h=ih*{}:color={}:t=4:{en}[{next}]", f(o.x), f(o.y), f(o.w), f(o.h), colour(if o.color.is_empty() { "#ffcc00" } else { &o.color })));
             }
             "blur" => {
                 // pixelate first so text cannot be read, then soften the blocks
+                let block = match o.level { 1 => 8, 3 => 24, _ => 14 };
                 let (a, b) = (format!("ba{i}"), format!("bb{i}"));
                 g.push(format!("[{cur_v}]split[{a}][{b}]"));
-                g.push(format!("[{b}]crop=trunc(iw*{}/2)*2:trunc(ih*{}/2)*2:iw*{}:ih*{},scale=iw/14:ih/14,scale=iw*14:ih*14:flags=neighbor,boxblur=10:2[bl{i}]", f(o.w), f(o.h), f(o.x), f(o.y)));
+                g.push(format!("[{b}]crop=trunc(iw*{}/2)*2:trunc(ih*{}/2)*2:iw*{}:ih*{},scale=iw/{blk}:ih/{blk},scale=iw*{blk}:ih*{blk}:flags=neighbor,boxblur={rad}:2[bl{i}]", f(o.w), f(o.h), f(o.x), f(o.y), blk = block, rad = block * 2 / 3));
                 g.push(format!("[{a}][bl{i}]overlay=x=W*{}:y=H*{}:{en}[{next}]", f(o.x), f(o.y)));
             }
             _ => continue,
@@ -223,6 +233,12 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
     Ok((a, ext))
 }
 
+/// A scratch folder name no other job in this process shares.
+pub(crate) fn unique_tmp(prefix: &str) -> PathBuf {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)))
+}
+
 fn unique(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
@@ -234,18 +250,26 @@ fn unique(path: PathBuf) -> PathBuf {
 
 pub fn export(p: &Project) -> Result<PathBuf> {
     let input = Path::new(&p.input);
-    let tmp = std::env::temp_dir().join(format!("recora-edit-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp)?;
-    let fps = ffmpeg::fps(input).unwrap_or(30.0);
-    let (mut args, ext) = build(p, ffmpeg::has_audio(input), fps, &tmp)?;
     let stem = input.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let suffix = match p.preset.as_str() { "gif" => " (edited GIF)", "small" => " (edited, small)", "vertical" => " (edited, vertical)", "youtube" => " (edited, YouTube)", _ => " (edited)" };
+    let ext = if p.preset == "gif" { "gif" } else { "mp4" };
     let out = unique(input.with_file_name(format!("{stem}{suffix}.{ext}")));
+    export_to(p, &out)?;
+    Ok(out)
+}
+
+/// Same, to a path of the caller's choosing.
+pub fn export_to(p: &Project, out: &Path) -> Result<()> {
+    let input = Path::new(&p.input);
+    let tmp = unique_tmp("recora-edit");
+    std::fs::create_dir_all(&tmp)?;
+    let fps = ffmpeg::fps(input).unwrap_or(30.0);
+    let (mut args, _ext) = build(p, ffmpeg::has_audio(input), fps, &tmp)?;
     args.push(out.to_string_lossy().into());
     let r = ffmpeg::run(&args);
     let _ = std::fs::remove_dir_all(&tmp);
     r?;
-    Ok(out)
+    Ok(())
 }
 
 /// One picture of `n` thumbnails side by side for the timeline.
@@ -374,9 +398,9 @@ mod tests {
         let d = tempfile_dir("edit1");
         let mut p = proj(sample(&d));
         p.overlays = vec![
-            Overlay { kind: "text".into(), start: 0.2, end: 2.0, x: 0.1, y: 0.8, w: 0.0, h: 0.0, text: "Hello: it's 100% fine".into(), size: 0.06, color: "#ffffff".into() },
-            Overlay { kind: "box".into(), start: 0.0, end: 3.0, x: 0.1, y: 0.1, w: 0.3, h: 0.2, text: String::new(), size: 0.0, color: "#ff3b30".into() },
-            Overlay { kind: "blur".into(), start: 0.0, end: 3.0, x: 0.5, y: 0.5, w: 0.3, h: 0.3, text: String::new(), size: 0.0, color: String::new() },
+            Overlay { kind: "text".into(), start: 0.2, end: 2.0, x: 0.1, y: 0.8, w: 0.0, h: 0.0, text: "Hello: it's 100% fine".into(), size: 0.06, color: "#ffffff".into(), level: 0, bg: false },
+            Overlay { kind: "box".into(), start: 0.0, end: 3.0, x: 0.1, y: 0.1, w: 0.3, h: 0.2, text: String::new(), size: 0.0, color: "#ff3b30".into(), level: 0, bg: true },
+            Overlay { kind: "blur".into(), start: 0.0, end: 3.0, x: 0.5, y: 0.5, w: 0.3, h: 0.3, text: String::new(), size: 0.0, color: String::new(), level: 3, bg: true },
         ];
         let out = export(&p).unwrap();
         let dur = ffmpeg::duration(&out).unwrap();
