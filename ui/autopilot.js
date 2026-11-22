@@ -11,16 +11,15 @@
   const sum = (v, f) => v.reduce((s, r) => s + f(r), 0);
 
   // what is worth offering? the numbers come from the quick analysis, no AI involved
-  function decide(it, A) {
+  function decide(it, A, plan) {
     const dur = it.duration, ms = (it.markers || []).slice().sort((a, b) => a - b);
-    const sil = A.silences.filter(([a, b]) => b - a >= 0.8), idl = A.idle.filter(([a, b]) => b - a >= 2);
-    const saves = sum(sil, ([a, b]) => b - a - 0.3) + sum(idl, ([a, b]) => (b - a - 0.8) * 0.75);
+    const sil = plan.cuts, idl = plan.fast, saves = plan.saved;
     if (ms.length >= 2 && dur > 60) {
       let cover = 0, last = -1e9; ms.forEach((m) => { const a = Math.max(0, m - 5), b = Math.min(dur, m + 10); cover += b - Math.max(a, last); last = Math.max(last, b); });
       if (cover < dur * 0.6) return { kind: "highlights", recipe: "highlights", title: `Keep your ${ms.length} marked moments`, text: `Saves ${fmt(dur - cover)}. Only the parts around the markers you pressed.`, saves: dur - cover };
     }
     if (saves >= Math.max(10, dur * 0.1)) {
-      const bits = []; if (sil.length) bits.push(`remove ${sil.length} silent ${sil.length === 1 ? "part" : "parts"}`); if (idl.length) bits.push(`speed up ${idl.length} waiting ${idl.length === 1 ? "moment" : "moments"}`);
+      const bits = []; if (sil.length) bits.push(`remove ${sil.length} dead-air ${sil.length === 1 ? "part" : "parts"}`); if (idl.length) bits.push(`speed up ${idl.length} waiting ${idl.length === 1 ? "moment" : "moments"}`);
       return { kind: "tutorial", recipe: "tutorial", title: `Saves ${fmt(saves)}`, text: bits.join(" and ").replace(/^./, (c) => c.toUpperCase()) + ".", saves };
     }
     if (it.size > 300 * 1024 * 1024) return { kind: "share", recipe: "share", title: "This file is large", text: `${Math.round(it.size / 1048576)} MB. Make a smaller copy that is easy to send?`, saves: 0 };
@@ -76,7 +75,8 @@
     if (md === "off" || !it || !VIDEO.includes(it.ext) || it.duration < 20 || seen.has(it.path)) return;
     seen.add(it.path);
     let A; try { A = await invoke("edit_analyze_quick", { path: it.path }); } catch (e) { return; }
-    const p = decide(it, A); if (!p || (m.mute && m.mute[p.kind])) return;
+    let plan; try { plan = await invoke("edit_plan", { analysis: A, dur: it.duration }); } catch (e) { return; }
+    const p = decide(it, A, plan); if (!p || (m.mute && m.mute[p.kind])) return;
     p.it = it;
     if (md === "auto" && p.kind === "tutorial") { act("polish", p); return; }
     show(p);

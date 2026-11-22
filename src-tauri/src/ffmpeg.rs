@@ -75,3 +75,15 @@ pub fn fps(path: &Path) -> Option<f64> {
     let i = text.find(" fps")?;
     text[..i].rsplit(|c: char| c == ',' || c == ' ').find(|s| !s.is_empty())?.parse::<f64>().ok()
 }
+
+/// Width and height of the first video stream.
+pub fn size(path: &Path) -> Option<(u32, u32)> {
+    let out = cmd().args(["-hide_banner", "-i"]).arg(path).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    let line = text.lines().find(|l| l.contains("Video:"))?;
+    line.split(|c: char| c == ',' || c == ' ' || c == '[').find_map(|t| {
+        let (a, b) = t.split_once('x')?;
+        let (w, h): (u32, u32) = (a.parse().ok()?, b.parse().ok()?);
+        if w >= 16 && h >= 16 { Some((w, h)) } else { None }
+    })
+}

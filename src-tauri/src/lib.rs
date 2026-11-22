@@ -1,8 +1,8 @@
 mod apps;
+mod shapes;
 mod diag;
 mod ai;
 mod edit;
-mod studio;
 mod ffmpeg;
 mod library;
 mod recorder;
@@ -659,14 +659,8 @@ async fn edit_analyze_quick(path: String) -> R<edit::Analysis> {
     tauri::async_runtime::spawn_blocking(move || edit::analyze_quick(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
 }
 #[tauri::command]
-async fn studio_render(state: State<'_, AppState>, project: studio::Project) -> R<String> {
-    let dir = PathBuf::from(state.settings.lock().out_dir.clone());
-    tauri::async_runtime::spawn_blocking(move || {
-        let out = studio::output_path(&dir, &project.title);
-        studio::render(&project, &out).map(|_| out.to_string_lossy().to_string()).map_err(e2s)
-    })
-    .await
-    .map_err(e2s)?
+fn edit_plan(analysis: edit::Analysis, dur: f64) -> edit::Plan {
+    edit::plan(&analysis, dur)
 }
 #[tauri::command]
 async fn edit_probe(path: String) -> R<library::Item> {
@@ -800,7 +794,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_analyze, edit_analyze_quick, studio_render, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_analyze, edit_analyze_quick, edit_plan, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())

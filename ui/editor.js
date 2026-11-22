@@ -4,12 +4,22 @@
   Object.assign(ICONS, {
     text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>',
     box: '<rect x="4" y="6" width="16" height="12" rx="2.5"/>',
+    image: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.4"/><path d="M5 17l4.5-4.5 3 3 2.5-2.5L20 17"/>',
+    sound: '<path d="M4 10v4h3l4 3.5v-11L7 10H4zM15 9.5a3.5 3.5 0 010 5M17.5 7a7 7 0 010 10"/>',
     blur: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M8 10h8M8 14h5" opacity=".55"/>',
     undo: '<path d="M9 7L4.5 11.5 9 16M5 11.5h9a5 5 0 0 1 0 10h-2"/>',
   });
   const SPEEDS = [0.5, 1, 1.5, 2, 4];
   const TRANS = [["none", "None"], ["fade", "Fade"], ["dissolve", "Dissolve"], ["slide", "Slide"], ["wipe", "Wipe"], ["zoom", "Zoom"], ["circle", "Circle"]];
   const PRESETS = [["", "Original"], ["youtube", "YouTube"], ["small", "Small"], ["vertical", "Vertical"], ["gif", "GIF"]];
+  const BOX_SHAPES = [["rect", "Rectangle"], ["round", "Rounded"], ["ellipse", "Ellipse"], ["arrow", "Arrow"], ["line", "Line"], ["spot", "Spotlight"]];
+  const BLUR_SHAPES = [["rect", "Rectangle"], ["round", "Rounded"], ["ellipse", "Ellipse"]];
+  const TXT_STYLES = [["plain", "Plain"], ["box", "Box"], ["outline", "Outline"], ["banner", "Banner"]];
+  const ANIMS = [["none", "None"], ["fade", "Fade"], ["slide", "Slide"]];
+  const FX = [["click", "Click", 0.12], ["pop", "Pop", 0.3], ["notify", "Notification", 0.5], ["success", "Success", 0.6], ["ding", "Ding", 1.4], ["whoosh", "Whoosh", 0.8]];
+  const MUSIC = [["pad", "Calm pad"], ["pulse", "Light pulse"]];
+  const AUDIO_EXT = ["mp3", "wav", "m4a", "aac", "ogg", "flac"], IMAGE_EXT = ["png", "jpg", "jpeg", "webp"];
+  const dlg = () => window.__TAURI__ && window.__TAURI__.dialog;
   const COLORS = ["#ffffff", "#ffcc00", "#ff3b30", "#34c759", "#0a84ff", "#000000"];
   let uid = 1;
   const S_AI = () => !!(window.__ai && window.__ai());
@@ -19,11 +29,11 @@
   window.openEditor = function (it, onDone, opts = {}) {
     closeEditor();
     const dur = it.duration || 1;
-    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", t: 0, playing: false, zoom: 1, strip: "", ar: 16 / 9, busy: false };
+    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, t: 0, playing: false, zoom: 1, strip: "", ar: 16 / 9, busy: false };
     const hist = [];
-    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans });
+    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro });
     const push = () => { hist.push(snap()); if (hist.length > 60) hist.shift(); };
-    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
+    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.intro = d.i || null; st.outro = d.u || null; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
 
     const len = (c) => (c.end - c.start) / c.speed;
     const total = () => st.clips.reduce((s, c) => s + len(c), 0);
@@ -34,7 +44,7 @@
     el.className = "ed"; el.id = "editor";
     el.innerHTML = `<div class="ed-mb" id="mb">${["File", "Edit", "Clip", "Add", "Tools", "View", "Help"].map((n) => `<button data-m="${n}">${n}</button>`).join("")}</div><div class="ed-top"><button class="btn sm" id="ed-x">${I("x")}Close</button><div class="ed-title" id="ed-title"></div><span class="grow"></span><div class="seg fit" id="ed-pre">${PRESETS.map(([k, n]) => `<button data-k="${k}">${n}</button>`).join("")}</div><button class="btn primary" id="ed-go">Export</button></div>
       <div class="ed-main">
-        <div class="ed-stage"><div class="ed-frame" id="frame"><video id="ev" src="${fileUrl(it.path)}" preload="auto" playsinline></video><div class="ed-ovl" id="ovl"></div></div></div>
+        <div class="ed-stage"><div class="ed-frame" id="frame"><video id="ev" src="${fileUrl(it.path)}" preload="auto" playsinline></video><div class="ed-spl" id="spl"></div><div class="ed-ovl" id="ovl"></div></div></div>
         <aside class="ed-side" id="side"></aside>
       </div>
       <div class="ed-bar"><button class="btn sm" id="b-play"></button><span class="ed-time" id="b-time">00:00 / 00:00</span><span class="grow"></span>
@@ -76,42 +86,79 @@
     const LINES = [0, 1 / 3, 0.5, 2 / 3, 1];
     const BLUR_PX = { 1: 5, 2: 9, 3: 16 };
     function ovNode(id) { return $$(".ov", ovl).find((n) => n.dataset.id == id); }
-    // normalised size of an overlay (text has no fixed box, so it is measured on screen)
+    // normalised size of an overlay (text and pictures have no fixed box, so they are measured on screen)
     function ovSize(o) {
-      if (o.kind !== "text") return { w: o.w, h: o.h };
+      if (o.kind !== "text" && o.kind !== "image") return { w: o.w, h: o.h };
       const n = ovNode(o.id), fr = frame.getBoundingClientRect();
-      return n && fr.width ? { w: n.offsetWidth / fr.width, h: n.offsetHeight / fr.height } : { w: 0.3, h: (o.size || 0.06) * 1.5 };
+      if (!n || !fr.width) return { w: o.kind === "image" ? o.w || 0.2 : 0.3, h: (o.size || 0.06) * 1.5 };
+      const t = $(".tx", n) || $("img", n) || n;
+      return { w: t.offsetWidth / fr.width, h: t.offsetHeight / fr.height };
+    }
+    const rgba = (hex, a) => { const h = (hex || "#000000").replace("#", ""); const v = (i) => parseInt(h.slice(i, i + 2), 16) || 0; return `rgba(${v(0)},${v(2)},${v(4)},${a})`; };
+    function arrowSvg(w, h, t, head, fx, fy, color) {
+      const m = Math.min(t * 1.2, Math.min(w, h) / 3), ax = m, ay = m, bx = w - m, by = h - m, len = Math.hypot(bx - ax, by - ay) || 1, ux = (bx - ax) / len, uy = (by - ay) / len;
+      const hl = head ? Math.min(len * 0.6, Math.max(t * 5, len * 0.22)) : 0, sx = bx - ux * hl * 0.8, sy = by - uy * hl * 0.8;
+      let poly = ""; if (head) { const nx = -uy, ny = ux, cx = bx - ux * hl, cy = by - uy * hl, hw = hl * 0.55; poly = `<polygon points="${bx},${by} ${cx + nx * hw},${cy + ny * hw} ${cx - nx * hw},${cy - ny * hw}" fill="${color}"/>`; }
+      const tr = (fx ? `translate(${w},0) scale(-1,1)` : "") + (fy ? ` translate(0,${h}) scale(1,-1)` : "");
+      return `<svg width="${w}" height="${h}" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none"><g transform="${tr}"><line x1="${ax}" y1="${ay}" x2="${sx}" y2="${sy}" stroke="${color}" stroke-width="${t}" stroke-linecap="round"/>${poly}</g></svg>`;
     }
     function styleOv(n, o, H) {
-      const on = st.t >= o.start && st.t <= o.end + 0.001;
-      n.className = `ov ${o.kind === "text" ? "t" : o.kind}${o.id === st.selOv ? " sel" : ""}${on ? "" : " off"}`;
+      const FW = frame.clientWidth || 640, on = st.t >= o.start && st.t <= o.end + 0.001;
+      const k = o.kind === "text" ? "t" : o.kind;
+      n.className = `ov ${k}${o.kind === "box" || o.kind === "blur" ? " s-" + (o.shape || "rect") : ""}${o.id === st.selOv ? " sel" : ""}${on ? "" : " off"}${o.kind === "text" && o.style === "banner" ? " banner" : ""}`;
       n.style.left = o.x * 100 + "%"; n.style.top = o.y * 100 + "%";
+      const an = o.anim === "none" || !o.anim ? 1 : (st.t - o.start < 0.3 ? Math.max(0.2, (st.t - o.start) / 0.3) : 1);
       if (o.kind === "text") {
-        n.style.fontSize = (o.size || 0.06) * H + "px"; n.style.color = o.color;
-        n.style.background = o.bg === false ? "transparent" : "";
-        n.style.textShadow = o.bg === false ? "0 1px 6px rgba(0,0,0,.7)" : "";
+        const style = o.style || (o.bg === false ? "plain" : "box"), col = o.color || "#ffffff", c2 = o.color2 || (style === "banner" ? "#0a84ff" : "#000000");
+        n.style.fontSize = (o.size || 0.06) * H + "px"; n.style.color = col;
+        n.style.background = style === "box" ? rgba(c2, 0.6) : style === "banner" ? rgba(c2, 0.92) : "transparent";
+        n.style.textShadow = style === "plain" ? "0 1px 6px rgba(0,0,0,.7)" : "";
+        n.style.webkitTextStroke = style === "outline" ? Math.max(1, H * 0.004) + "px #000" : ""; n.style.paintOrder = "stroke fill";
+        n.style.padding = style === "box" ? ".22em .4em" : style === "banner" ? ".45em 0" : "0";
+        if (style === "banner") { n.style.left = "0"; n.style.width = "100%"; n.style.paddingLeft = o.x * 100 + "%"; n.style.boxSizing = "border-box"; } else { n.style.width = ""; n.style.paddingLeft = ""; n.style.boxSizing = ""; }
         const tx = n.firstChild; if (tx.textContent !== o.text) tx.textContent = o.text;
+      } else if (o.kind === "image") {
+        n.style.width = (o.w || 0.2) * 100 + "%"; n.style.opacity = o.opacity > 0 ? o.opacity : 1; const im = $("img", n); if (im && im.dataset.p !== o.path) { im.dataset.p = o.path; im.src = fileUrl(o.path); }
       } else {
+        const w = o.w * FW, h = o.h * (frame.clientHeight || 360), sh = o.shape || "rect";
         n.style.width = o.w * 100 + "%"; n.style.height = o.h * 100 + "%";
-        if (o.kind === "box") n.style.borderColor = o.color;
-        else { const px = (BLUR_PX[o.level] || 9) + "px"; n.style.backdropFilter = `blur(${px})`; n.style.webkitBackdropFilter = `blur(${px})`; }
+        const rad = sh === "ellipse" ? "50%" : sh === "round" ? Math.min(w, h) * 0.2 + "px" : "2px";
+        if (o.kind === "box") {
+          const th = Math.max(2, (o.thick > 0 ? o.thick : 0.006) * (frame.clientHeight || 360)), art = $(".art", n);
+          if (sh === "arrow" || sh === "line") { n.style.border = "0"; n.style.background = "transparent"; art.innerHTML = arrowSvg(w, h, th, sh === "arrow", o.flipx, o.flipy, o.color || "#ffcc00"); }
+          else if (sh === "spot") { n.style.border = "1.5px dashed rgba(255,255,255,.8)"; n.style.background = "transparent"; n.style.borderRadius = o.mode === "rect" ? "2px" : "50%"; art.innerHTML = ""; }
+          else { art.innerHTML = ""; n.style.border = `${th}px solid ${o.color || "#ffcc00"}`; n.style.background = o.fill > 0 ? rgba(o.color || "#ffcc00", o.fill) : "transparent"; n.style.borderRadius = rad; n.style.boxSizing = "border-box"; }
+        } else {
+          n.style.borderRadius = rad;
+          if (o.mode === "solid") { n.style.background = o.color || "#000"; n.style.backdropFilter = ""; n.style.webkitBackdropFilter = ""; n.style.border = "0"; }
+          else { const px = (o.mode === "soft" ? { 1: 4, 2: 8, 3: 14 } : { 1: 5, 2: 9, 3: 16 })[o.level || 2] + "px"; n.style.background = "rgba(160,160,170,.35)"; n.style.backdropFilter = `blur(${px})`; n.style.webkitBackdropFilter = `blur(${px})`; n.style.border = "1px dashed rgba(255,255,255,.7)"; }
+        }
       }
+      n.style.setProperty("--an", an);
     }
     function paintOverlays() {
       const H = frame.clientHeight || 360;
-      const want = st.ov.filter((o) => o.id === st.selOv || (st.t >= o.start && st.t <= o.end + 0.001));
+      const want = st.ov.filter((o) => o.kind !== "sound" && (o.id === st.selOv || (st.t >= o.start && st.t <= o.end + 0.001)));
       const have = new Map($$(".ov", ovl).map((n) => [n.dataset.id, n]));
+      const spl = $("#spl", el); const haveS = new Map($$("i", spl).map((n) => [n.dataset.id, n]));
       want.forEach((o) => {
         let n = have.get(String(o.id));
         if (!n) {
           n = document.createElement("div"); n.dataset.id = o.id; if (o.kind === "text") n.dir = "auto";
-          n.innerHTML = (o.kind === "text" ? `<span class="tx"></span>` : "") + HANDLES.filter((h) => o.kind !== "text" || h.length === 2).map((h) => `<i class="hd ${h}" data-h="${h}"></i>`).join("");
+          const hs = o.kind === "text" || o.kind === "image" || o.shape === "arrow" || o.shape === "line" ? HANDLES.filter((h) => h.length === 2) : HANDLES;
+          n.innerHTML = (o.kind === "text" ? `<span class="tx"></span>` : o.kind === "image" ? `<img draggable="false" alt="">` : o.kind === "box" ? `<span class="art"></span>` : "") + hs.map((h) => `<i class="hd ${h}" data-h="${h}"></i>`).join("");
           n.onpointerdown = (e) => dragOverlay(e, n);
           ovl.appendChild(n);
         }
         have.delete(String(o.id)); styleOv(n, o, H);
+        // spotlight: the dimming layer sits under the controls
+        if (o.kind === "box" && o.shape === "spot") {
+          const on = st.t >= o.start && st.t <= o.end + 0.001; let s = haveS.get(String(o.id)); if (!s) { s = document.createElement("i"); s.dataset.id = o.id; spl.appendChild(s); }
+          haveS.delete(String(o.id)); s.style.cssText = `left:${o.x * 100}%;top:${o.y * 100}%;width:${o.w * 100}%;height:${o.h * 100}%;border-radius:${o.mode === "rect" ? "2px" : "50%"};box-shadow:0 0 0 9999px rgba(0,0,0,${on ? (o.fill > 0 ? Math.min(o.fill, 0.9) : 0.65) : 0})`;
+        }
+        // pictures need their shape for the next measurement
       });
-      have.forEach((n) => n.remove());
+      have.forEach((n) => n.remove()); haveS.forEach((n) => n.remove());
     }
     function guides(x, y) {
       let gx = $(".gd.v", ovl), gy = $(".gd.h", ovl);
@@ -128,7 +175,7 @@
       if (st.selOv !== o.id) { st.selOv = o.id; st.sel = -1; drawSide(); drawTl(); paintOverlays(); }
       push();
       const fr = frame.getBoundingClientRect(), h = e.target.dataset.h || "";
-      const sx = e.clientX, sy = e.clientY, o0 = { x: o.x, y: o.y, w: o.w, h: o.h, size: o.size }, sz = ovSize(o);
+      const sx = e.clientX, sy = e.clientY, o0 = { x: o.x, y: o.y, w: o.w || (o.kind === "image" ? 0.2 : 0), h: o.h, size: o.size }, sz = ovSize(o);
       const tolX = 7 / fr.width, tolY = 7 / fr.height;
       const mv = (ev) => {
         const dx = (ev.clientX - sx) / fr.width, dy = (ev.clientY - sy) / fr.height, free = ev.altKey;
@@ -142,6 +189,10 @@
             if (syn) { y = syn[0] - syn[1] * sz.h / 2; gy = syn[0]; }
           }
           o.x = clamp(x, 0, Math.max(0, 1 - Math.min(sz.w, 0.98))); o.y = clamp(y, 0, Math.max(0, 1 - Math.min(sz.h, 0.98)));
+        } else if (o.kind === "image") {                       // corners scale the picture, keeping its shape
+          const east = h.includes("e"), f = clamp((o0.w || 0.2) + (east ? dx : -dx), 0.04, 1) / (o0.w || 0.2);
+          o.w = (o0.w || 0.2) * f; const ratio = sz.h / Math.max(sz.w, 0.01);
+          if (!east) o.x = clamp(o0.x + (o0.w || 0.2) - o.w, 0, 1); if (h.includes("n")) o.y = clamp(o0.y + sz.h - o.w * ratio, 0, 1);
         } else if (o.kind === "text") {                        // corners scale the lettering
           const east = h.includes("e"), south = h.includes("s");
           const f = clamp(1 + ((east ? dx : -dx) / Math.max(sz.w, 0.05) + (south ? dy : -dy) / Math.max(sz.h, 0.05)) / 2, 0.3, 4);
@@ -193,8 +244,12 @@
         return `<div class="cl${i === st.sel ? " sel" : ""}" data-i="${i}" style="left:${S[i] * k}px;width:${w}px;${bg}"><i class="eh l"></i><i class="eh r"></i>${c.speed !== 1 ? `<b class="sp">${c.speed}×</b>` : ""}${mk}</div>`;
       }).join("");
       const joins = st.trans.kind !== "none" ? S.slice(1).map((s) => `<i class="jn" style="left:${s * k}px" title="${st.trans.kind}"></i>`).join("") : "";
-      const bars = st.ov.map((o, i) => `<div class="ob ${o.kind}${o.id === st.selOv ? " sel" : ""}" data-id="${o.id}" style="left:${o.start * k}px;width:${Math.max(8, (o.end - o.start) * k)}px;top:${(i % 3) * 22}px"><i class="eh l"></i><span>${o.kind === "text" ? esc(o.text || "Text") : o.kind === "box" ? "Highlight" : "Blur"}</span><i class="eh r"></i></div>`).join("");
-      tlEl.innerHTML = `<div class="tl-in" style="width:${W + 24}px"><div class="tl-ruler" id="ruler">${ticks}</div><div class="tl-clips" id="tcl">${clips}${joins}</div><div class="tl-ovs" id="tov">${bars || `<em>Add text, a highlight or a blur from the side panel</em>`}</div><i class="ph2" id="ph2"></i></div>`;
+      // each bar takes the first lane where it does not overlap another
+      const laneEnd = [], lane = new Map();
+      st.ov.slice().sort((a, b) => a.start - b.start).forEach((o) => { let l = laneEnd.findIndex((x) => x <= o.start + 0.001); if (l < 0) l = laneEnd.length; laneEnd[l] = o.end; lane.set(o.id, l); });
+      const lanes = Math.max(1, laneEnd.length);
+      const bars = st.ov.map((o) => `<div class="ob ${o.kind}${o.id === st.selOv ? " sel" : ""}" data-id="${o.id}" style="left:${o.start * k}px;width:${Math.max(8, (o.end - o.start) * k)}px;top:${lane.get(o.id) * 22}px"><i class="eh l"></i><span>${o.kind === "text" ? esc(o.text || "Text") : o.kind === "box" ? (BOX_SHAPES.find(([v]) => v === (o.shape || "rect")) || [0, "Highlight"])[1] : o.kind === "image" ? esc(o.name || "Picture") : o.kind === "sound" ? esc(o.name || "Sound") : "Blur"}</span><i class="eh r"></i></div>`).join("");
+      tlEl.innerHTML = `<div class="tl-in" style="width:${W + 24}px"><div class="tl-ruler" id="ruler">${ticks}</div><div class="tl-clips" id="tcl">${clips}${joins}</div><div class="tl-ovs" id="tov" style="height:${lanes * 22 + 6}px">${bars || `<em>Add text, a highlight or a blur from the side panel</em>`}</div><i class="ph2" id="ph2"></i></div>`;
       tlEl.querySelector(".tl-in").style.setProperty("--k", k);
       wireTl(k); paintHead();
     }
@@ -268,7 +323,8 @@
       try {
         if (!st.an) st.an = await invoke("edit_analyze", { path: it.path });
         const before = total(); push();
-        if (kind === "silence") {
+        if (kind === "silence" && quietMsg(st.an)) { hist.pop(); toast(quietMsg(st.an)); }
+        else if (kind === "silence") {
           const r = st.an.silences.filter(([a, b]) => b - a >= 0.8).map(([a, b]) => [a + 0.15, b - 0.15]).filter(([a, b]) => b > a);
           if (!r.length) { hist.pop(); toast("No silent parts found"); } else { cutRanges(r); toast(`Removed ${r.length} silent ${r.length === 1 ? "part" : "parts"}, ${fmt(before - total())} shorter`); }
         } else if (kind === "idle") {
@@ -321,15 +377,16 @@
       cutRanges(src); st.sel = 0; st.selOv = null; st.ov.forEach((o) => { o.end = Math.min(o.end, total()); o.start = Math.min(o.start, Math.max(0, o.end - 0.2)); });
       seek(Math.min(st.t, total())); draw(); toast(`${mode === "cut" ? "Removed" : "Kept"} ${rs.length} ${rs.length === 1 ? "range" : "ranges"}, now ${fmt(total())} (was ${fmt(before)})`);
     }
+    // one careful plan for the whole recording: dead air goes, still moments speed up, never more than half is taken
+    const planFor = async () => { if (!st.an) st.an = await invoke("edit_analyze", { path: it.path }); return invoke("edit_plan", { analysis: st.an, dur }); };
+    const quietMsg = (A) => (!A.voice ? "No clear voice in this recording, so pauses can't be told from speech. Nothing was removed" : A.silences.reduce((s, [a, b]) => s + b - a, 0) > dur * 0.6 ? "Most of this recording is quiet, so removing silences would remove too much" : "");
+    function applyPlan(pl) { if (pl.fast.length) speedRanges(pl.fast, pl.speed); if (pl.cuts.length) cutRanges(pl.cuts); }
     async function cleanup(btn) {
       const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Cleaning up…`;
       try {
-        if (!st.an) st.an = await invoke("edit_analyze", { path: it.path });
-        const A = st.an, before = total(); push();
-        const sil = A.silences.filter(([a, b]) => b - a >= 0.8).map(([a, b]) => [a < 0.3 ? 0 : a + 0.15, b >= dur - 0.3 ? dur : b - 0.15]).filter(([a, b]) => b > a);
-        const idl = A.idle.filter(([a, b]) => b - a >= 2).map(([a, b]) => [a + 0.4, b - 0.4]).filter(([a, b]) => b > a);
-        if (!sil.length && !idl.length) { hist.pop(); toast("Nothing to clean up. This recording is already tight"); }
-        else { if (idl.length) speedRanges(idl, 4); if (sil.length) cutRanges(sil); st.sel = 0; seek(Math.min(st.t, total())); draw(); toast(`Cleaned up: ${sil.length} silent ${sil.length === 1 ? "part" : "parts"} removed, ${idl.length} still ${idl.length === 1 ? "moment" : "moments"} sped up. ${fmt(before - total())} shorter`); }
+        const pl = await planFor(), before = total(); push();
+        if (!pl.cuts.length && !pl.fast.length) { hist.pop(); toast("Nothing to clean up. This recording is already tight"); }
+        else { applyPlan(pl); st.sel = 0; seek(Math.min(st.t, total())); draw(); toast(`Cleaned up: ${pl.cuts.length} dead ${pl.cuts.length === 1 ? "part" : "parts"} removed, ${pl.fast.length} still ${pl.fast.length === 1 ? "moment" : "moments"} sped up. ${fmt(before - total())} shorter. Undo brings it back`); }
       } catch (err) { hist.pop(); toast(err, true); }
       btn.disabled = false; btn.innerHTML = old;
     }
@@ -364,7 +421,9 @@
     const N = (k, label, unit, def, min, max, step) => ({ k, label, unit, def, min, max, step });
     const STEPS = {
       silence: { label: "Remove silences", hint: "Cuts pauses and joins what is left", params: [N("min", "Pauses longer than", "s", 0.8, 0.3, 3, 0.1), N("pad", "Keep around speech", "s", 0.15, 0, 0.6, 0.05)],
-        async run(p) { const A = await analysis(), r = A.silences.filter(([a, b]) => b - a >= p.min).map(([a, b]) => [a < 0.3 ? 0 : a + p.pad, b >= dur - 0.3 ? dur : b - p.pad]).filter(([a, b]) => b > a); if (!r.length) return "No silences"; cutRanges(r); return `${r.length} silent ${r.length === 1 ? "part" : "parts"} removed`; } },
+        async run(p) { const A = await analysis(); if (quietMsg(A)) return "Skipped: " + quietMsg(A).split(".")[0].toLowerCase(); const r = A.silences.filter(([a, b]) => b - a >= p.min).map(([a, b]) => [a < 0.3 ? 0 : a + p.pad, b >= dur - 0.3 ? dur : b - p.pad]).filter(([a, b]) => b > a); if (!r.length) return "No silences"; cutRanges(r); return `${r.length} silent ${r.length === 1 ? "part" : "parts"} removed`; } },
+      polish: { label: "Tidy up", hint: "Removes dead air and fast-forwards waiting, with a safe limit", params: [],
+        async run() { const pl = await planFor(); if (!pl.cuts.length && !pl.fast.length) return "Already tight"; applyPlan(pl); return `${pl.cuts.length} dead ${pl.cuts.length === 1 ? "part" : "parts"} removed, ${pl.fast.length} still ${pl.fast.length === 1 ? "moment" : "moments"} sped up`; } },
       idle: { label: "Speed up still screen", hint: "Fast-forwards while nothing changes", params: [N("speed", "Speed", "×", 4, 2, 8, 1), N("min", "Still for longer than", "s", 2, 1, 10, 0.5)],
         async run(p) { const A = await analysis(), r = A.idle.filter(([a, b]) => b - a >= p.min).map(([a, b]) => [a + 0.4, b - 0.4]).filter(([a, b]) => b > a); if (!r.length) return "No still moments"; speedRanges(r, Math.min(p.speed, 4)); return `${r.length} still ${r.length === 1 ? "moment" : "moments"} sped up`; } },
       markers: { label: "Keep my marked moments", hint: "Keeps only the parts around the markers you pressed (F8)", params: [N("before", "Before each marker", "s", 5, 1, 30, 1), N("after", "After each marker", "s", 10, 1, 60, 1)],
@@ -377,20 +436,22 @@
         async run(p) { const T = total(); if (T <= p.sec) return "Already short enough"; const f = T / p.sec; st.clips.forEach((c) => (c.speed = r2(clamp(c.speed * f, 0.25, 4)))); return total() > p.sec + 1 ? `Sped up to the limit, now ${fmt(total())}` : `Sped up ${f.toFixed(1)}× to fit`; } },
       transition: { label: "Smooth the joins", hint: "A short transition wherever pieces meet", params: [{ k: "kind", label: "Style", select: [["fade", "Fade"], ["dissolve", "Dissolve"], ["slide", "Slide"], ["wipe", "Wipe"], ["zoom", "Zoom"], ["circle", "Circle"]], def: "fade" }, N("dur", "Length", "s", 0.4, 0.2, 1.5, 0.1)],
         async run(p) { st.trans = { kind: p.kind, dur: p.dur }; return st.clips.length > 1 ? "Transitions set" : "Set, it shows once there are cuts"; } },
-      title: { label: "Opening title", hint: "Use {name} for the recording's name", params: [{ k: "text", label: "Text", text: true, def: "{name}" }, N("dur", "Shown for", "s", 3, 1, 10, 0.5)],
-        async run(p) { const t = p.text.replace(/\{name\}/g, it.name).trim(); if (!t) return "No text"; st.ov.push({ id: uid++, kind: "text", start: 0, end: Math.min(p.dur, total()), x: 0.08, y: 0.42, w: 0, h: 0, text: t, size: 0.09, color: "#ffffff" }); return "Title added"; } },
-      endcard: { label: "Closing text", hint: "A line at the very end", params: [{ k: "text", label: "Text", text: true, def: "Thanks for watching" }, N("dur", "Shown for", "s", 3, 1, 10, 0.5)],
-        async run(p) { const t = p.text.trim(); if (!t) return "No text"; const T = total(); st.ov.push({ id: uid++, kind: "text", start: r2(Math.max(0, T - p.dur)), end: r2(T), x: 0.08, y: 0.42, w: 0, h: 0, text: t, size: 0.08, color: "#ffffff" }); return "Closing text added"; } },
+      title: { label: "Opening card", hint: "A title card before the video. Use {name} for the recording's name", params: [{ k: "text", label: "Text", text: true, def: "{name}" }, { k: "sub", label: "Smaller line", text: true, def: "" }],
+        async run(p) { const t = p.text.replace(/\{name\}/g, it.name).trim(); if (!t) return "No text"; st.intro = { text: t, sub: p.sub || "", dur: 3 }; return "Opening card added"; } },
+      endcard: { label: "Closing card", hint: "A card after the video", params: [{ k: "text", label: "Text", text: true, def: "Thanks for watching" }, { k: "sub", label: "Smaller line", text: true, def: "" }],
+        async run(p) { const t = p.text.trim(); if (!t) return "No text"; st.outro = { text: t, sub: p.sub || "", dur: 3 }; return "Closing card added"; } },
+      music: { label: "Background music", hint: "A calm generated track under the whole video, quiet and faded", params: [{ k: "track", label: "Track", select: [["pad", "Calm pad"], ["pulse", "Light pulse"]], def: "pad" }, N("vol", "Volume", "%", 25, 5, 100, 5)],
+        async run(p) { const T = total(); st.ov.push({ id: uid++, kind: "sound", snd: "fx", fx: p.track, name: p.track === "pad" ? "Calm pad" : "Light pulse", music: true, repeat: true, start: 0, end: r2(T), x: 0, y: 0, w: 0, h: 0, vol: p.vol / 100, fade: 1 }); return "Music added"; } },
       output: { label: "Save as", hint: "The format of the finished video", params: [{ k: "preset", label: "Format", select: [["", "Original quality"], ["youtube", "YouTube"], ["small", "Small file"], ["vertical", "Vertical (phone)"], ["gif", "GIF"]], def: "" }],
         async run(p) { st.preset = p.preset; return "Format: " + (PRESETS.find(([k]) => k === p.preset) || [0, "Original"])[1]; } },
     };
     const mk = (t, p) => ({ t, on: true, p: { ...Object.fromEntries(STEPS[t].params.map((q) => [q.k, q.def])), ...(p || {}) } });
     const BUILTIN = [
-      { id: "tutorial", name: "Tutorial polish", desc: "Tighten a how-to: no dead air, no waiting", steps: [mk("silence"), mk("idle"), mk("transition", { dur: 0.25 })] },
-      { id: "social", name: "Short for social", desc: "A vertical clip of about a minute", steps: [mk("silence"), mk("idle"), mk("fit", { sec: 60 }), mk("output", { preset: "vertical" })] },
+      { id: "tutorial", name: "Tutorial polish", desc: "Tighten a how-to: no dead air, no waiting", steps: [mk("polish"), mk("transition", { dur: 0.25 })] },
+      { id: "social", name: "Short for social", desc: "A vertical clip of about a minute", steps: [mk("polish"), mk("fit", { sec: 60 }), mk("output", { preset: "vertical" })] },
       { id: "highlights", name: "My marked moments", desc: "Only what you marked while recording", steps: [mk("markers"), mk("transition"), mk("output", { preset: "youtube" })] },
-      { id: "share", name: "Quick share", desc: "Smaller and shorter, ready to send", steps: [mk("silence"), mk("idle"), mk("output", { preset: "small" })] },
-      { id: "intro", name: "Titled video", desc: "Opening title and closing line", steps: [mk("silence"), mk("title"), mk("endcard"), mk("transition")] },
+      { id: "share", name: "Quick share", desc: "Smaller and shorter, ready to send", steps: [mk("polish"), mk("output", { preset: "small" })] },
+      { id: "intro", name: "Finished video", desc: "Tidy up, add title cards and smooth joins, ready to share", steps: [mk("polish"), mk("title"), mk("endcard"), mk("transition"), { ...mk("music"), on: false }] },
     ];
     const loadMine = () => { try { return JSON.parse(localStorage.getItem("recora.recipes") || "[]"); } catch (e) { return []; } };
     const saveMine = (a) => { try { localStorage.setItem("recora.recipes", JSON.stringify(a)); } catch (e) { toast("Could not save the recipe here", true); } };
@@ -453,15 +514,9 @@
         <div class="label sm">Smart tools</div>
         <div class="smart"><button class="sm-b" data-smart="silence"><b>Remove silences</b><span>Cuts every pause longer than a moment</span></button><button class="sm-b" data-smart="idle"><b>Speed up still screen</b><span>Fast-forwards while nothing changes</span></button><button class="sm-b" data-smart="scenes"><b>Find scenes</b><span>Splits where the picture changes</span></button></div>
         <div class="label sm">Add to the video</div>
-        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button></div>
-        ${o ? `<div class="label sm">${o.kind === "text" ? "Text" : o.kind === "box" ? "Highlight" : "Blur"}</div><div class="card">
-          ${o.kind === "text" ? `<textarea id="o-text" dir="auto" rows="2" placeholder="Type here">${esc(o.text)}</textarea><div class="row2"><span>Size</span><input type="range" id="o-size" min="0.02" max="0.2" step="0.005" value="${o.size || 0.06}"></div><div class="row2"><span>Background</span><div class="seg fit" id="o-bg"><button data-v="1" class="${o.bg !== false ? "on" : ""}">On</button><button data-v="0" class="${o.bg === false ? "on" : ""}">Off</button></div></div>` : ""}
-          ${o.kind === "blur" ? `<div class="row2"><span>Strength</span><div class="seg fit" id="o-lv"><button data-v="1" class="${o.level === 1 ? "on" : ""}">Light</button><button data-v="2" class="${(o.level || 2) === 2 ? "on" : ""}">Medium</button><button data-v="3" class="${o.level === 3 ? "on" : ""}">Strong</button></div></div>` : `<div class="row2"><span>Colour</span><div class="sws">${swatches(o.color)}</div></div>`}
-          <div class="row2"><span>Position</span><div class="al" id="o-al">${[["l", "Left"], ["c", "Centre"], ["r", "Right"], ["t", "Top"], ["m", "Middle"], ["b", "Bottom"]].map(([k, n]) => `<button data-a="${k}" title="${n}">${n[0]}</button>`).join("")}</div></div>
-          <div class="row2"><span>From</span><input class="num" type="number" id="o-s" min="0" step="0.1" value="${o.start.toFixed(1)}"><span>to</span><input class="num" type="number" id="o-e" min="0" step="0.1" value="${o.end.toFixed(1)}"></div>
-          <div class="row2"><button class="btn sm" id="o-here">Start here</button><button class="btn sm" id="o-end">End here</button></div>
-          <div class="row2"><button class="btn sm" id="o-dup">Duplicate</button><button class="btn sm" id="o-del">${I("trash")}Remove</button></div>
-          <p class="ai-note" style="margin:0">Drag on the picture, pull any handle to resize. Arrow keys nudge it, Alt turns snapping off.</p></div>` : ""}
+        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>
+        ${cardsCard()}
+        ${o ? ovCard(o) : ""}
         ${c ? `<div class="label sm">Selected piece</div><div class="card"><div class="row2"><span>Speed</span><div class="seg fit" id="sp">${SPEEDS.map((s) => `<button data-s="${s}" class="${c.speed === s ? "on" : ""}">${s}×</button>`).join("")}</div></div><div class="row2"><span>Length</span><span class="muted">${fmt(len(c))}</span></div></div>` : ""}
         <div class="label sm">Transition between pieces</div>
         <div class="card"><div class="tgrid" id="tr">${TRANS.map(([k, n]) => `<button data-k="${k}" class="${st.trans.kind === k ? "on" : ""}">${n}</button>`).join("")}</div>
@@ -472,11 +527,72 @@
       const ag = $("#ai-go", side); if (ag) { const q = $("#ai-q", side); q.onkeydown = (ev) => ev.stopPropagation(); q.value = st.aiText || ""; ag.onclick = () => askAi(ag); const est = () => { st.aiText = q.value; if (!q.value.trim()) { $("#ai-est", side).textContent = ""; return; } facts().then((f) => invoke("ai_estimate", { instruction: q.value, facts: f })).then((n) => { $("#ai-est", side).textContent = `About ${n} tokens`; }).catch(() => {}); }; let tm; q.oninput = () => { clearTimeout(tm); tm = setTimeout(est, 600); }; }
       const as = $("#ai-set", side); if (as) as.onclick = () => { closeEditor(); window.__goSettings && window.__goSettings(); };
       $$("[data-smart]", side).forEach((b) => (b.onclick = () => smart(b.dataset.smart, b)));
-      $$("[data-add]", side).forEach((b) => (b.onclick = () => addOverlay(b.dataset.add)));
-      const t = $("#o-text", side); if (t) { t.oninput = () => { o.text = t.value; paintOverlays(); drawTl(); }; t.onfocus = push; t.onkeydown = (e) => e.stopPropagation(); }
+      $$("[data-add]", side).forEach((b) => (b.onclick = () => (b.dataset.add === "sound" ? soundMenu(b) : addOverlay(b.dataset.add))));
+      if (o) wireOv(o);
+      wireCards();
+      $$("#sp button", side).forEach((b) => (b.onclick = () => { push(); c.speed = +b.dataset.s; seek(Math.min(st.t, total())); draw(); }));
+      $$("#tr button", side).forEach((b) => (b.onclick = () => { push(); st.trans.kind = b.dataset.k; draw(); }));
+      const td = $("#tr-d", side); if (td) { td.onpointerdown = push; td.oninput = () => { st.trans.dur = +(+td.value).toFixed(1); td.nextElementSibling.textContent = st.trans.dur + "s"; }; }
+    }
+    const SW = (list, cur, attr) => list.map((x) => `<button class="sw${x === cur ? " on" : ""}" ${attr}="${x}" style="background:${x}"></button>`).join("");
+    const sg = (field, opts, cur) => `<div class="seg fit">${opts.map(([v, n]) => `<button data-o="${field}" data-v="${v}" class="${String(cur) === String(v) ? "on" : ""}">${n}</button>`).join("")}</div>`;
+    const KIND_NAME = { text: "Text", box: "Highlight", blur: "Blur", image: "Picture", sound: "Sound" };
+    function ovCard(o) {
+      const tm = `<div class="row2"><span>From</span><input class="num" type="number" id="o-s" min="0" step="0.1" value="${o.start.toFixed(1)}"><span>to</span><input class="num" type="number" id="o-e" min="0" step="0.1" value="${o.end.toFixed(1)}"></div><div class="row2"><button class="btn sm" id="o-here">Start here</button><button class="btn sm" id="o-end">End here</button></div>`;
+      const foot = `<div class="row2"><button class="btn sm" id="o-dup">Duplicate</button><button class="btn sm" id="o-del">${I("trash")}Remove</button></div>`;
+      const pos = `<div class="row2"><span>Position</span><div class="al" id="o-al">${[["l", "Left"], ["c", "Centre"], ["r", "Right"], ["t", "Top"], ["m", "Middle"], ["b", "Bottom"]].map(([k, n]) => `<button data-a="${k}" title="${n}">${n[0]}</button>`).join("")}</div></div>`;
+      const anim = `<div class="row2"><span>Appears</span>${sg("anim", ANIMS, o.anim || "none")}</div>`;
+      const colour = (label, key, cur) => `<div class="row2"><span>${label}</span><div class="sws">${SW(COLORS, cur, "data-c")}<input type="color" class="cp" id="o-cc" value="${cur || "#ffcc00"}"></div></div>`;
+      let body = "";
+      if (o.kind === "text") {
+        const style = o.style || (o.bg === false ? "plain" : "box");
+        body = `<textarea id="o-text" dir="auto" rows="2" placeholder="Type here">${esc(o.text)}</textarea>
+          <div class="row2"><span>Style</span>${sg("style", TXT_STYLES, style)}</div>
+          <div class="row2"><span>Size</span><input type="range" id="o-size" min="0.02" max="0.2" step="0.005" value="${o.size || 0.06}"></div>
+          ${colour("Colour", "color", o.color || "#ffffff")}
+          ${style === "box" || style === "banner" ? `<div class="row2"><span>Behind it</span><div class="sws">${SW(["#000000", "#0a84ff", "#ff3b30", "#34c759", "#ffcc00", "#ffffff"], o.color2 || (style === "banner" ? "#0a84ff" : "#000000"), "data-c2")}</div></div>` : ""}${anim}${pos}`;
+      } else if (o.kind === "box") {
+        const sh = o.shape || "rect", line = sh === "arrow" || sh === "line", spot = sh === "spot";
+        body = `<div class="row2"><span>Shape</span><div class="shp">${BOX_SHAPES.map(([v, n]) => `<button data-o="shape" data-v="${v}" class="${sh === v ? "on" : ""}">${n}</button>`).join("")}</div></div>
+          ${spot ? `<div class="row2"><span>Hole</span>${sg("mode", [["ellipse", "Round"], ["rect", "Square"]], o.mode === "rect" ? "rect" : "ellipse")}</div><div class="row2"><span>Dimming</span>${sg("fill", [[0.4, "Light"], [0.65, "Medium"], [0.85, "Strong"]], o.fill || 0.65)}</div>` : `${colour("Colour", "color", o.color || "#ffcc00")}<div class="row2"><span>Thickness</span>${sg("thick", [[0.003, "Thin"], [0.006, "Medium"], [0.012, "Thick"]], o.thick || 0.006)}</div>
+          ${line ? `<div class="row2"><span>Direction</span><div class="seg fit"><button data-o="flipx" data-v="${!o.flipx}">↔ Flip</button><button data-o="flipy" data-v="${!o.flipy}">↕ Flip</button></div></div>` : `<div class="row2"><span>Fill</span>${sg("fill", [[0, "None"], [0.2, "Light"], [0.5, "Medium"], [1, "Solid"]], o.fill || 0)}</div>`}`}${anim}${pos}`;
+      } else if (o.kind === "blur") {
+        const mode = o.mode || "pixel";
+        body = `<div class="row2"><span>Shape</span>${sg("shape", BLUR_SHAPES, o.shape || "rect")}</div>
+          <div class="row2"><span>Effect</span>${sg("mode", [["pixel", "Pixelate"], ["soft", "Soft"], ["solid", "Cover"]], mode)}</div>
+          ${mode === "solid" ? colour("Colour", "color", o.color || "#000000") : `<div class="row2"><span>Strength</span>${sg("level", [[1, "Light"], [2, "Medium"], [3, "Strong"]], o.level || 2)}</div>`}
+          <p class="ai-note" style="margin:0">Pixelate and Cover make the text underneath unreadable. Soft is gentler.</p>${pos}`;
+      } else if (o.kind === "image") {
+        body = `<div class="row2"><span>Size</span><input type="range" id="o-iw" min="0.04" max="1" step="0.01" value="${o.w || 0.2}"></div><div class="row2"><span>Opacity</span><input type="range" id="o-op" min="0.1" max="1" step="0.05" value="${o.opacity > 0 ? o.opacity : 1}"></div>${anim}${pos}<div class="row2"><button class="btn sm" id="o-swap">Choose another picture</button></div>`;
+      } else {
+        body = `<div class="row2"><span>Volume</span><input type="range" id="o-vol" min="0.1" max="2" step="0.05" value="${o.vol || 1}"><span class="muted" id="o-vv">${Math.round((o.vol || 1) * 100)}%</span></div>
+          <div class="row2"><span>Fade</span>${sg("fade", [[0, "None"], [0.5, "Short"], [1, "Medium"], [2, "Long"]], o.fade || 0)}</div>
+          ${o.snd === "file" || o.music ? `<div class="row2"><span>Repeat</span>${sg("repeat", [[false, "Off"], [true, "To fill the time"]], !!o.repeat)}</div>` : ""}
+          ${o.snd === "file" ? `<div class="row2"><button class="btn sm" id="o-play">Preview</button></div>` : ""}`;
+      }
+      return `<div class="label sm">${KIND_NAME[o.kind]}${o.kind === "sound" ? ": " + esc(o.name || "") : ""}</div><div class="card">${body}${tm}${foot}<p class="ai-note" style="margin:0">${o.kind === "sound" ? "Drag the bar in the timeline to move it. Sounds are mixed into the exported video." : "Drag on the picture, pull a handle to resize. Arrow keys nudge it, Alt turns snapping off."}</p></div>`;
+    }
+    function wireOv(o) {
+      const rebuild = () => { const n = ovNode(o.id); if (n) n.remove(); drawSide(); drawTl(); paintOverlays(); };
+      $$("[data-o]", side).forEach((b) => (b.onclick = () => {
+        push(); const f = b.dataset.o; let v = b.dataset.v; v = v === "true" ? true : v === "false" ? false : v !== "" && !isNaN(+v) ? +v : v; o[f] = v;
+        if (f === "style") o.bg = v === "box";
+        if (f === "shape") { if (v === "arrow" || v === "line") { o.h = Math.max(o.h, 0.15); } if (o.kind === "box" && v === "spot") { o.w = Math.max(o.w, 0.25); o.h = Math.max(o.h, 0.25); } }
+        rebuild();
+      }));
+      const t = $("#o-text", side); if (t) { t.oninput = () => { o.text = t.value; paintOverlays(); drawTl(); }; t.onfocus = push; t.onkeydown = (ev) => ev.stopPropagation(); }
       const sz = $("#o-size", side); if (sz) { sz.onpointerdown = push; sz.oninput = () => { o.size = +sz.value; paintOverlays(); }; }
-      $$(".sw", side).forEach((b) => (b.onclick = () => { push(); o.color = b.dataset.c; paintOverlays(); drawSide(); }));
+      $$("[data-c]", side).forEach((b) => (b.onclick = () => { push(); o.color = b.dataset.c; drawSide(); paintOverlays(); }));
+      $$("[data-c2]", side).forEach((b) => (b.onclick = () => { push(); o.color2 = b.dataset.c2; drawSide(); paintOverlays(); }));
+      const cc = $("#o-cc", side); if (cc) { cc.onfocus = push; cc.oninput = () => { o.color = cc.value; paintOverlays(); }; cc.onchange = () => drawSide(); }
+      const iw = $("#o-iw", side); if (iw) { iw.onpointerdown = push; iw.oninput = () => { o.w = +iw.value; paintOverlays(); }; }
+      const op = $("#o-op", side); if (op) { op.onpointerdown = push; op.oninput = () => { o.opacity = +op.value; paintOverlays(); }; }
+      const sw2 = $("#o-swap", side); if (sw2) sw2.onclick = async () => { const f = await pickFile(IMAGE_EXT, "Picture"); if (f) { push(); o.path = f; o.name = f.split(/[\\/]/).pop(); const n = ovNode(o.id); if (n) n.remove(); paintOverlays(); } };
+      const vo = $("#o-vol", side); if (vo) { vo.onpointerdown = push; vo.oninput = () => { o.vol = +vo.value; $("#o-vv", side).textContent = Math.round(o.vol * 100) + "%"; }; }
+      const pl = $("#o-play", side); if (pl) pl.onclick = () => { try { if (window.__prev) { window.__prev.pause(); window.__prev = null; pl.textContent = "Preview"; return; } window.__prev = new Audio(fileUrl(o.path)); window.__prev.play(); pl.textContent = "Stop"; window.__prev.onended = () => { window.__prev = null; pl.textContent = "Preview"; }; } catch (err) {} };
+      $$("#o-al button", side).forEach((b) => (b.onclick = () => align(o, b.dataset.a)));
       const dl = $("#o-del", side); if (dl) dl.onclick = () => { push(); st.ov = st.ov.filter((x) => x !== o); st.selOv = null; draw(); };
+      const od = $("#o-dup", side); if (od) od.onclick = dupOverlay;
       const oh = $("#o-here", side); if (oh) oh.onclick = () => { push(); const L = o.end - o.start; o.start = r2(st.t); o.end = r2(Math.min(total(), o.start + L)); if (o.end - o.start < 0.2) o.end = r2(Math.min(total(), o.start + 0.2)); draw(); };
       const oe = $("#o-end", side); if (oe) oe.onclick = () => { push(); o.end = r2(Math.max(o.start + 0.2, Math.min(total(), st.t))); draw(); };
       const os = $("#o-s", side), oe2 = $("#o-e", side);
@@ -484,19 +600,53 @@
         const upd = () => { os.value = o.start.toFixed(1); oe2.value = o.end.toFixed(1); drawTl(); paintOverlays(); };
         os.onchange = () => { o.start = r2(clamp(+os.value || 0, 0, o.end - 0.2)); upd(); };
         oe2.onchange = () => { o.end = r2(clamp(+oe2.value || 0, o.start + 0.2, total())); upd(); }; }
-      const od = $("#o-dup", side); if (od) od.onclick = dupOverlay;
-      $$("#o-al button", side).forEach((b) => (b.onclick = () => align(o, b.dataset.a)));
-      $$("#o-lv button", side).forEach((b) => (b.onclick = () => { push(); o.level = +b.dataset.v; drawSide(); paintOverlays(); }));
-      $$("#o-bg button", side).forEach((b) => (b.onclick = () => { push(); o.bg = b.dataset.v === "1"; drawSide(); paintOverlays(); }));
-      $$("#sp button", side).forEach((b) => (b.onclick = () => { push(); c.speed = +b.dataset.s; seek(Math.min(st.t, total())); draw(); }));
-      $$("#tr button", side).forEach((b) => (b.onclick = () => { push(); st.trans.kind = b.dataset.k; draw(); }));
-      const td = $("#tr-d", side); if (td) { td.onpointerdown = push; td.oninput = () => { st.trans.dur = +(+td.value).toFixed(1); td.nextElementSibling.textContent = st.trans.dur + "s"; }; }
+    }
+    // title cards before and after the video
+    const CARD_BG = ["#101828", "#1c1c1e", "#0b1f3a", "#2b1a3d", "#14342b", "#f2f2f7"], CARD_AC = ["#0a84ff", "#34c759", "#ff9f0a", "#ff375f", "#bf5af2", "#30d5c8"];
+    st.cardc = { bg: "#101828", accent: "#0a84ff" };
+    function cardsCard() {
+      const row = (key, label, def) => { const c = st[key]; return `<div class="row2"><span>${label}</span><button class="switch${c ? " on" : ""}" data-card="${key}" role="switch" aria-checked="${!!c}"></button></div>${c ? `<input class="txt wide" data-ct="${key}|text" dir="auto" placeholder="Title" value="${esc(c.text)}"><input class="txt wide" data-ct="${key}|sub" dir="auto" placeholder="Smaller line (optional)" value="${esc(c.sub)}">` : ""}`; };
+      return `<div class="label sm">Title cards</div><div class="card">${row("intro", "Opening")}${row("outro", "Closing")}${st.intro || st.outro ? `<div class="row2"><span>Background</span><div class="sws">${SW(CARD_BG, st.cardc.bg, "data-cbg")}</div></div><div class="row2"><span>Accent</span><div class="sws">${SW(CARD_AC, st.cardc.accent, "data-cac")}</div></div><p class="ai-note" style="margin:0">Added at export, about 3 seconds each. Nothing in the picture above changes.</p>` : `<p class="ai-note" style="margin:0">A plain card with your words before or after the video.</p>`}</div>`;
+    }
+    function wireCards() {
+      $$("[data-card]", side).forEach((b) => (b.onclick = () => { push(); const k = b.dataset.card; st[k] = st[k] ? null : { text: k === "intro" ? it.name : "Thanks for watching", sub: "", dur: 3 }; drawSide(); }));
+      $$("[data-ct]", side).forEach((i) => { const [k, f] = i.dataset.ct.split("|"); i.onkeydown = (ev) => ev.stopPropagation(); i.onfocus = push; i.oninput = () => { st[k][f] = i.value; }; });
+      $$("[data-cbg]", side).forEach((b) => (b.onclick = () => { st.cardc.bg = b.dataset.cbg; drawSide(); }));
+      $$("[data-cac]", side).forEach((b) => (b.onclick = () => { st.cardc.accent = b.dataset.cac; drawSide(); }));
+    }
+    async function pickFile(exts, name) { try { const f = await dlg().open({ multiple: false, filters: [{ name, extensions: exts }] }); return f ? (Array.isArray(f) ? f[0] : f) : null; } catch (err) { toast(err, true); return null; } }
+    async function addImage(pos) {
+      const f = await pickFile(IMAGE_EXT, "Picture"); if (!f) return;
+      push(); const T = total(), s = clamp(st.t, 0, Math.max(0, T - 0.5));
+      const base = { id: uid++, kind: "image", path: f, name: f.split(/[\\/]/).pop(), start: r2(s), end: r2(Math.min(T, s + 4)), x: 0.7, y: 0.08, w: 0.2, h: 0, opacity: 1, anim: "fade" };
+      if (pos) { base.x = clamp(pos.x - 0.1, 0, 0.8); base.y = clamp(pos.y - 0.1, 0, 0.8); }
+      st.ov.push(base); st.selOv = base.id; st.sel = -1; draw();
+    }
+    async function addSound(spec) {
+      let len = spec.len || 5, path = spec.path || "";
+      if (spec.snd === "file") { try { const p = await invoke("edit_probe", { path }); len = p.duration || 10; } catch (err) { len = 10; } }
+      push(); const T = total(), s = clamp(st.t, 0, Math.max(0, T - 0.2));
+      const music = !!spec.music, fill = music || spec.repeat;
+      const base = { id: uid++, kind: "sound", snd: spec.snd, fx: spec.fx || "", path, name: spec.name, music, repeat: fill, start: r2(s), end: r2(fill ? T : Math.min(T, s + len)), x: 0, y: 0, w: 0, h: 0, vol: music ? 0.3 : 1, fade: music ? 1 : 0 };
+      if (base.end - base.start < 0.2) base.end = r2(Math.min(T, base.start + 0.2));
+      st.ov.push(base); st.selOv = base.id; st.sel = -1; draw();
+    }
+    function soundMenu(btn) {
+      const r = btn.getBoundingClientRect();
+      showMenu(r.left, r.bottom + 4, [
+        { head: "Sound effects" }, ...FX.map(([id, n, d]) => ({ label: n, fn: () => addSound({ snd: "fx", fx: id, name: n, len: d }) })),
+        "-", { head: "Music" }, ...MUSIC.map(([id, n]) => ({ label: n, fn: () => addSound({ snd: "fx", fx: id, name: n, music: true, len: 20 }) })),
+        { label: "My music file…", fn: async () => { const f = await pickFile(AUDIO_EXT, "Audio"); if (f) addSound({ snd: "file", path: f, name: f.split(/[\\/]/).pop(), music: true, repeat: false }); } },
+        "-", { label: "My sound file…", fn: async () => { const f = await pickFile(AUDIO_EXT, "Audio"); if (f) addSound({ snd: "file", path: f, name: f.split(/[\\/]/).pop() }); } },
+      ]);
     }
     function addOverlay(kind, pos) {
+      if (kind === "image") return addImage(pos);
       push(); const T = total(), s = clamp(st.t, 0, Math.max(0, T - 0.5));
-      const base = { id: uid++, kind, start: r2(s), end: r2(Math.min(T, s + 3)), x: 0.1, y: 0.1, w: 0.3, h: 0.2, text: "", size: 0.06, color: kind === "box" ? "#ffcc00" : "#ffffff", level: 2, bg: true };
-      if (kind === "text") { base.text = "Your text"; base.y = 0.78; base.x = 0.08; }
-      if (kind === "blur") { base.x = 0.35; base.y = 0.35; }
+      const base = { id: uid++, kind, start: r2(s), end: r2(Math.min(T, s + 3)), x: 0.1, y: 0.1, w: 0.3, h: 0.2, text: "", size: 0.06, color: kind === "box" ? "#ffcc00" : "#ffffff", level: 2, bg: true, shape: "rect", anim: "none" };
+      if (kind === "text") { base.text = "Your text"; base.y = 0.78; base.x = 0.08; base.style = "box"; }
+      if (kind === "box") { base.fill = 0; base.thick = 0.006; }
+      if (kind === "blur") { base.x = 0.35; base.y = 0.35; base.mode = "pixel"; }
       if (pos) { base.x = clamp(pos.x - (kind === "text" ? 0.02 : base.w / 2), 0, 0.9); base.y = clamp(pos.y - (kind === "text" ? 0.03 : base.h / 2), 0, 0.9); }
       st.ov.push(base); st.selOv = base.id; st.sel = -1; draw();
       const t = $("#o-text", side); if (t) { t.focus(); t.select(); }
@@ -524,7 +674,10 @@
       const project = {
         input: it.path, preset: st.preset, transition: { kind: st.trans.kind === "none" ? "" : st.trans.kind, dur: st.trans.dur },
         clips: st.clips.map((c) => ({ start: r2(c.start), end: r2(c.end), speed: c.speed })),
-        overlays: st.ov.map((o) => ({ kind: o.kind, start: Math.max(0, shift(o.start)), end: Math.max(0.2, shift(o.end)), x: o.x, y: o.y, w: o.w, h: o.h, text: o.text, size: o.size, color: o.color, level: o.level || 2, bg: o.bg !== false })),
+        overlays: st.ov.filter((o) => o.kind !== "sound").map((o) => ({ kind: o.kind, start: Math.max(0, shift(o.start)), end: Math.max(0.2, shift(o.end)), x: o.x, y: o.y, w: o.w || 0, h: o.h || 0, text: o.text || "", size: o.size || 0, color: o.color || "", level: o.level || 2, bg: o.bg !== false, shape: o.shape || "", fill: o.fill || 0, thick: o.thick || 0, flipx: !!o.flipx, flipy: !!o.flipy, style: o.style || "", color2: o.color2 || "", mode: o.mode || "", path: o.path || "", opacity: o.opacity || 0, anim: o.anim && o.anim !== "none" ? o.anim : "" })),
+        sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.end)), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat })),
+        intro: st.intro ? { text: st.intro.text, sub: st.intro.sub, dur: st.intro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
+        outro: st.outro ? { text: st.outro.text, sub: st.outro.sub, dur: st.outro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
       };
       void S;
       st.busy = true; setPlay(false); const b = $("#ed-go", el); b.disabled = true; b.innerHTML = `<span class="spin"></span>Exporting…`;
@@ -567,7 +720,7 @@
         { label: "Start at the playhead", fn: () => { push(); const L = o.end - o.start; o.start = st.t; o.end = Math.min(total(), o.start + L); draw(); } },
         { label: "Show until the end", fn: () => { push(); o.end = total(); draw(); } },
         { label: "Show for the whole video", fn: () => { push(); o.start = 0; o.end = total(); draw(); } },
-        ...(o.kind !== "blur" ? [{ label: "Colour", sub: COLORS.map((c) => ({ label: `<i class="dotc" style="background:${c}"></i>${c === "#ffffff" ? "White" : c === "#ffcc00" ? "Yellow" : c === "#ff3b30" ? "Red" : c === "#34c759" ? "Green" : c === "#0a84ff" ? "Blue" : "Black"}${o.color === c ? "  ✓" : ""}`, fn: () => { push(); o.color = c; draw(); } })) }] : []),
+        ...(o.kind === "text" || o.kind === "box" ? [{ label: "Colour", sub: COLORS.map((c) => ({ label: `<i class="dotc" style="background:${c}"></i>${c === "#ffffff" ? "White" : c === "#ffcc00" ? "Yellow" : c === "#ff3b30" ? "Red" : c === "#34c759" ? "Green" : c === "#0a84ff" ? "Blue" : "Black"}${o.color === c ? "  ✓" : ""}`, fn: () => { push(); o.color = c; draw(); } })) }] : []),
         "-", { label: "Delete", key: "Del", danger: true, fn: () => { push(); st.ov = st.ov.filter((x2) => x2 !== o); st.selOv = null; draw(); } },
       ]);
     }
@@ -642,7 +795,7 @@
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
       else if (e.key === "Escape") { if ($(".ctx", el)) closeMenu(); else if (st.selOv) { st.selOv = null; draw(); } else if ($(".rcp", el)) closeRecipes(); else closeEditor(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") { e.preventDefault(); dupOverlay(); }
-      else if (st.selOv && e.key.startsWith("Arrow")) { e.preventDefault(); const k = e.shiftKey ? 0.02 : 0.004; if (e.key === "ArrowLeft") nudge(-k, 0); else if (e.key === "ArrowRight") nudge(k, 0); else if (e.key === "ArrowUp") nudge(0, -k); else nudge(0, k); }
+      else if (st.selOv && (st.ov.find((x) => x.id === st.selOv) || {}).kind !== "sound" && e.key.startsWith("Arrow")) { e.preventDefault(); const k = e.shiftKey ? 0.02 : 0.004; if (e.key === "ArrowLeft") nudge(-k, 0); else if (e.key === "ArrowRight") nudge(k, 0); else if (e.key === "ArrowUp") nudge(0, -k); else nudge(0, k); }
       else if (e.key === "ArrowLeft") { setPlay(false); seek(st.t - (e.shiftKey ? 5 : 1 / 30)); }
       else if (e.key === "ArrowRight") { setPlay(false); seek(st.t + (e.shiftKey ? 5 : 1 / 30)); }
       e.stopPropagation();

@@ -24,8 +24,8 @@ pub struct Transition {
     pub dur: f64,
 }
 
-/// `kind`: text, box, blur. Times are on the edited timeline, positions are fractions of the frame.
-#[derive(Deserialize, Clone, Debug)]
+/// `kind`: text, box, blur, image. Times are on the edited timeline, positions are fractions of the frame.
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct Overlay {
     pub kind: String,
     pub start: f64,
@@ -48,12 +48,80 @@ pub struct Overlay {
     /// a dark box behind text; on unless the editor turns it off
     #[serde(default = "yes")]
     pub bg: bool,
+    /// rect | round | ellipse | arrow | line | spot
+    #[serde(default)]
+    pub shape: String,
+    /// how much the inside of a highlight is filled, 0 to 1
+    #[serde(default)]
+    pub fill: f64,
+    /// outline thickness as a fraction of the frame height
+    #[serde(default)]
+    pub thick: f64,
+    #[serde(default)]
+    pub flipx: bool,
+    #[serde(default)]
+    pub flipy: bool,
+    /// text: plain | box | outline | banner
+    #[serde(default)]
+    pub style: String,
+    /// colour of the box or banner behind text
+    #[serde(default)]
+    pub color2: String,
+    /// blur: pixel | soft | solid
+    #[serde(default)]
+    pub mode: String,
+    /// image file
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub opacity: f64,
+    /// none | fade | slide
+    #[serde(default)]
+    pub anim: String,
 }
+
+/// Sound laid over the video. Times are on the edited timeline.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Sound {
+    /// file | fx
+    pub kind: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub fx: String,
+    pub start: f64,
+    /// 0 plays it to its natural end
+    #[serde(default)]
+    pub end: f64,
+    /// 0 means normal
+    #[serde(default)]
+    pub vol: f64,
+    #[serde(default)]
+    pub fade: f64,
+    /// repeat to fill the time (music)
+    #[serde(default)]
+    pub repeat: bool,
+}
+
+/// A title card added before or after the video.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Card {
+    pub text: String,
+    #[serde(default)]
+    pub sub: String,
+    #[serde(default)]
+    pub dur: f64,
+    #[serde(default)]
+    pub bg: String,
+    #[serde(default)]
+    pub accent: String,
+}
+
 fn yes() -> bool {
     true
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct Project {
     pub input: String,
     pub clips: Vec<Clip>,
@@ -63,6 +131,17 @@ pub struct Project {
     pub overlays: Vec<Overlay>,
     #[serde(default)]
     pub preset: String,
+    #[serde(default)]
+    pub sounds: Vec<Sound>,
+    #[serde(default)]
+    pub intro: Option<Card>,
+    #[serde(default)]
+    pub outro: Option<Card>,
+    /// size of the source picture; filled in on export
+    #[serde(default)]
+    pub vw: u32,
+    #[serde(default)]
+    pub vh: u32,
 }
 
 fn xfade_name(k: &str) -> Option<&'static str> {
@@ -128,6 +207,78 @@ pub(crate) fn font_file() -> Option<String> {
     cands.iter().find(|p| Path::new(p).exists()).map(|s| esc_path(s))
 }
 
+fn rgb(c: &str) -> [u8; 3] {
+    let h = colour(c);
+    let h = h.trim_start_matches("0x");
+    let v = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(255);
+    [v(0), v(2), v(4)]
+}
+
+fn luminance(c: &str) -> f64 {
+    let [r, g, b] = rgb(c);
+    0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64
+}
+
+/// A title card as a video segment (and a silent sound segment when the video has sound). Returns its length.
+fn card_seg(g: &mut Vec<String>, c: &Card, tag: &str, tmp: &Path, size: (u32, u32), rate: f64, with_audio: bool) -> Result<f64> {
+    let d = if c.dur >= 1.0 { c.dur.min(10.0) } else { 3.0 };
+    let bg = if c.bg.is_empty() { "#101828" } else { &c.bg };
+    let ac = if c.accent.is_empty() { "#0a84ff" } else { &c.accent };
+    let ink = if luminance(bg) > 160.0 { "0x111111" } else { "white" };
+    let ff = font_file().map(|x| format!("fontfile='{x}':")).unwrap_or_default();
+    let (w, h) = size;
+    let big = if h > w { 0.05 } else { 0.075 };
+    let mut chain = format!("color=c={}:s={w}x{h}:r={}:d={},format=yuv420p,setsar=1,drawbox=x=iw*0.42:y=ih*0.57:w=iw*0.16:h=6:color={}:t=fill", colour(bg), f(rate), f(d), colour(ac));
+    if !c.text.trim().is_empty() {
+        let tf = text_file(tmp, 900 + tag.len() * 7 + tag.as_bytes()[0] as usize, &c.text)?;
+        chain += &format!(",drawtext={ff}textfile='{tf}':fontsize=h*{}:fontcolor={ink}:x=(w-text_w)/2:y=h*0.44-text_h/2", f(big));
+    }
+    if !c.sub.trim().is_empty() {
+        let tf = text_file(tmp, 950 + tag.len() * 7 + tag.as_bytes()[0] as usize, &c.sub)?;
+        chain += &format!(",drawtext={ff}textfile='{tf}':fontsize=h*0.034:fontcolor={ink}@0.75:x=(w-text_w)/2:y=h*0.66");
+    }
+    g.push(format!("{chain}[v{tag}]"));
+    if with_audio {
+        g.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={},asetpts=PTS-STARTPTS[a{tag}]", f(d)));
+    }
+    Ok(d)
+}
+
+/// Sound effects and music made on the spot, so nothing needs a licence. Returns the ffmpeg source and its length.
+pub fn fx_source(name: &str) -> Option<(String, f64)> {
+    let e = |expr: &str, d: f64| (format!("aevalsrc={expr}:s=48000:d={d}"), d);
+    Some(match name {
+        "click" => e("0.9*sin(2*PI*1800*t)*exp(-t*90)", 0.12),
+        "pop" => e("0.9*sin(2*PI*600*t)*exp(-t*28)", 0.3),
+        "ding" => e("0.5*(sin(2*PI*1319*t)+0.45*sin(2*PI*2637*t))*exp(-t*4.5)", 1.4),
+        "success" => e("0.5*sin(2*PI*if(lt(t\\,0.14)\\,659\\,if(lt(t\\,0.28)\\,880\\,1175))*t)*exp(-mod(t\\,0.14)*7)", 0.6),
+        "notify" => e("0.5*sin(2*PI*if(lt(t\\,0.12)\\,988\\,1319)*t)*exp(-mod(t\\,0.12)*9)", 0.5),
+        "whoosh" => ("anoisesrc=d=0.8:c=pink:r=48000:a=0.7,highpass=f=250,lowpass=f=5000,afade=t=in:d=0.4,afade=t=out:st=0.4:d=0.4".into(), 0.8),
+        "pad" => e("0.12*(sin(2*PI*130.81*t)+sin(2*PI*196*t)+sin(2*PI*261.63*t)+0.7*sin(2*PI*329.63*t)+0.5*sin(2*PI*392*t))*(0.75+0.25*sin(2*PI*0.1*t))", 20.0),
+        "pulse" => e("0.3*sin(2*PI*if(lt(mod(t\\,2)\\,0.5)\\,261.63\\,if(lt(mod(t\\,2)\\,1)\\,329.63\\,if(lt(mod(t\\,2)\\,1.5)\\,392\\,329.63)))*t)*exp(-mod(t\\,0.5)*3)", 16.0),
+        _ => return None,
+    })
+}
+
+/// Lays a PNG over the picture for a time range, with an optional fade or slide in and out.
+fn png_layer(g: &mut Vec<String>, extra: &mut Vec<String>, n_in: &mut usize, png_path: &str, rate: f64, (t0, t1): (f64, f64), at: (String, String), o: &Overlay, vh: u32, cur: &str, next: &str, i: usize, pre: &str) {
+    let idx = *n_in;
+    *n_in += 1;
+    extra.extend(["-loop".into(), "1".into(), "-framerate".into(), f(rate), "-t".into(), f(t1 + 0.1), "-i".into(), png_path.to_string()]);
+    let mut ch = format!("[{idx}:v]{pre}format=rgba");
+    if o.opacity > 0.0 && o.opacity < 1.0 {
+        ch += &format!(",colorchannelmixer=aa={}", f(o.opacity));
+    }
+    let animated = o.anim == "fade" || o.anim == "slide";
+    if animated {
+        let d = 0.3f64.min((t1 - t0) / 3.0);
+        ch += &format!(",fade=t=in:st={}:d={}:alpha=1,fade=t=out:st={}:d={}:alpha=1", f(t0), f(d), f((t1 - d).max(t0)), f(d));
+    }
+    g.push(format!("{ch}[ly{i}]"));
+    let y = if o.anim == "slide" { format!("{}+(1-min(1\\,max(0\\,(t-{})/0.35)))*{}", at.1, f(t0), f(vh as f64 * 0.05)) } else { at.1.clone() };
+    g.push(format!("[{cur}][ly{i}]overlay=x={}:y='{}':enable='between(t,{},{})':eof_action=pass[{next}]", at.0, y, f(t0), f(t1)));
+}
+
 /// Builds the ffmpeg arguments (without the output file) and returns them with the output extension.
 pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<String>, &'static str)> {
     if p.clips.is_empty() {
@@ -138,12 +289,15 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
             return Err(anyhow!("A piece of the video is shorter than 0.05 s"));
         }
     }
-    let has_audio = has_audio && p.preset != "gif";
+    let gif = p.preset == "gif";
+    let has_audio = has_audio && !gif;
+    let (vw, vh) = if p.vw > 1 && p.vh > 1 { (p.vw & !1, p.vh & !1) } else { (1920, 1080) };
     let n = p.clips.len();
     let l = lengths(p);
-    let td = trans_dur(p, &l);
     let rate = fps.clamp(10.0, 60.0);
     let mut g: Vec<String> = vec![];
+    let mut extra: Vec<String> = vec![];
+    let mut n_in = 1usize;
     for (i, c) in p.clips.iter().enumerate() {
         let sp = c.speed.clamp(0.25, 8.0);
         g.push(format!("[0:v]trim=start={}:end={},setpts=(PTS-STARTPTS)/{},fps={},format=yuv420p,setsar=1[v{i}]", f(c.start), f(c.end), f(sp), f(rate)));
@@ -155,55 +309,133 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
             while s < 0.5 { tempo.push(0.5); s /= 0.5; }
             tempo.push(s);
             let t = tempo.iter().map(|x| format!("atempo={}", f(*x))).collect::<Vec<_>>().join(",");
-            g.push(format!("[0:a]atrim=start={}:end={},asetpts=PTS-STARTPTS,{},aresample=48000[a{i}]", f(c.start), f(c.end), t));
+            g.push(format!("[0:a]atrim=start={}:end={},asetpts=PTS-STARTPTS,{},aresample=48000,aformat=channel_layouts=stereo[a{i}]", f(c.start), f(c.end), t));
         }
     }
-    // join the pieces
-    let mut cur_v = "v0".to_string();
-    let mut cur_a = "a0".to_string();
-    if n == 1 {
+    // the pieces, with an optional title card before and after
+    let (mut nv, mut na, mut sl): (Vec<String>, Vec<String>, Vec<f64>) = (vec![], vec![], vec![]);
+    let mut intro_len = 0.0;
+    if let Some(c) = &p.intro {
+        intro_len = card_seg(&mut g, c, "ci", tmp, (vw, vh), rate, has_audio)?;
+        nv.push("vci".into()); na.push("aci".into()); sl.push(intro_len);
+    }
+    for i in 0..n { nv.push(format!("v{i}")); na.push(format!("a{i}")); sl.push(l[i]); }
+    if let Some(c) = &p.outro {
+        let d = card_seg(&mut g, c, "co", tmp, (vw, vh), rate, has_audio)?;
+        nv.push("vco".into()); na.push("aco".into()); sl.push(d);
+    }
+    let m = nv.len();
+    let td = trans_dur(p, &sl);
+    let total_len = sl.iter().sum::<f64>() - td * (m.saturating_sub(1)) as f64;
+    // overlays and sounds are placed on the edited video, so they move later by the title card
+    let off = if p.intro.is_some() { intro_len - td } else { 0.0 };
+    let mut cur_v = nv[0].clone();
+    let mut cur_a = na[0].clone();
+    if m == 1 {
         // nothing to join
     } else if td > 0.0 {
         let kind = xfade_name(&p.transition.kind).unwrap();
-        let mut len = l[0];
-        for k in 1..n {
-            let (nv, na) = (format!("x{k}"), format!("y{k}"));
-            g.push(format!("[{cur_v}][v{k}]xfade=transition={kind}:duration={}:offset={}[{nv}]", f(td), f((len - td).max(0.0))));
+        let mut len = sl[0];
+        for k in 1..m {
+            let (xv, xa) = (format!("x{k}"), format!("y{k}"));
+            g.push(format!("[{cur_v}][{}]xfade=transition={kind}:duration={}:offset={}[{xv}]", nv[k], f(td), f((len - td).max(0.0))));
             if has_audio {
-                g.push(format!("[{cur_a}][a{k}]acrossfade=d={}[{na}]", f(td)));
-                cur_a = na;
+                g.push(format!("[{cur_a}][{}]acrossfade=d={}[{xa}]", na[k], f(td)));
+                cur_a = xa;
             }
-            cur_v = nv;
-            len += l[k] - td;
+            cur_v = xv;
+            len += sl[k] - td;
         }
     } else {
-        let ins: String = (0..n).map(|i| if has_audio { format!("[v{i}][a{i}]") } else { format!("[v{i}]") }).collect();
-        g.push(format!("{ins}concat=n={n}:v=1:a={}[cv]{}", if has_audio { 1 } else { 0 }, if has_audio { "[ca]" } else { "" }));
+        let ins: String = (0..m).map(|i| if has_audio { format!("[{}][{}]", nv[i], na[i]) } else { format!("[{}]", nv[i]) }).collect();
+        g.push(format!("{ins}concat=n={m}:v=1:a={}[cv]{}", if has_audio { 1 } else { 0 }, if has_audio { "[ca]" } else { "" }));
         cur_v = "cv".into();
         cur_a = "ca".into();
     }
     // overlays on the edited timeline
     let font = font_file();
     for (i, o) in p.overlays.iter().enumerate() {
-        let en = format!("enable='between(t,{},{})'", f(o.start), f(o.end.max(o.start + 0.1)));
+        let (t0, t1) = (o.start + off, (o.end + off).max(o.start + off + 0.1));
+        let en = format!("enable='between(t,{},{})'", f(t0), f(t1));
         let next = format!("o{i}");
+        let (vwf, vhf) = (vw as f64, vh as f64);
+        let anim = o.anim == "fade" || o.anim == "slide";
+        let fade_a = format!("alpha='min(1\\,max(0\\,(t-{})/0.3))*min(1\\,max(0\\,({}-t)/0.3))'", f(t0), f(t1));
         match o.kind.as_str() {
             "text" if !o.text.trim().is_empty() => {
                 let tf = text_file(tmp, i, &o.text)?;
                 let size = if o.size > 0.0 { o.size } else { 0.06 };
                 let ff = font.as_ref().map(|x| format!("fontfile='{x}':")).unwrap_or_default();
-                g.push(format!("[{cur_v}]drawtext={ff}textfile='{tf}':fontsize=h*{}:fontcolor={}:box={}:boxcolor=black@0.55:boxborderw=14:x=w*{}:y=h*{}:{en}[{next}]", f(size), colour(&o.color), if o.bg { 1 } else { 0 }, f(o.x), f(o.y)));
+                let style = if !o.style.is_empty() { o.style.as_str() } else if o.bg { "box" } else { "plain" };
+                let boxc = if o.color2.is_empty() { "0x000000".to_string() } else { colour(&o.color2) };
+                let mut chain = format!("[{cur_v}]");
+                let mut ty = format!("h*{}", f(o.y));
+                if o.anim == "slide" {
+                    ty = format!("h*{}+(1-min(1\\,max(0\\,(t-{})/0.35)))*h*0.04", f(o.y), f(t0));
+                }
+                let mut dt = format!("drawtext={ff}textfile='{tf}':fontsize=h*{}:fontcolor={}:x=w*{}:y='{ty}'", f(size), colour(&o.color), f(o.x));
+                match style {
+                    "box" => dt += &format!(":box=1:boxcolor={boxc}@0.6:boxborderw=14"),
+                    "outline" => dt += &format!(":borderw={}:bordercolor=black", ((vhf * 0.004).round()).max(2.0)),
+                    "banner" => {
+                        let pad = vhf * size * 0.45;
+                        let bc = if o.color2.is_empty() { "0x0a84ff".to_string() } else { colour(&o.color2) };
+                        chain += &format!("drawbox=x=0:y=ih*{}-{}:w=iw:h=ih*{}+{}:color={bc}@0.92:t=fill:{en},", f(o.y), f(pad), f(size * 1.25), f(pad * 2.0 - vhf * size * 0.25));
+                    }
+                    _ => dt += ":shadowcolor=black@0.7:shadowx=2:shadowy=2",
+                }
+                if anim { dt += &format!(":{fade_a}"); }
+                g.push(format!("{chain}{dt}:{en}[{next}]"));
             }
             "box" => {
-                g.push(format!("[{cur_v}]drawbox=x=iw*{}:y=ih*{}:w=iw*{}:h=ih*{}:color={}:t=4:{en}[{next}]", f(o.x), f(o.y), f(o.w), f(o.h), colour(if o.color.is_empty() { "#ffcc00" } else { &o.color })));
+                let shape = if o.shape.is_empty() { "rect" } else { o.shape.as_str() };
+                let col = if o.color.is_empty() { "#ffcc00" } else { &o.color };
+                let path = tmp.join(format!("sh{i}.png"));
+                let thick = (if o.thick > 0.0 { o.thick } else { 0.006 } * vhf).max(2.0);
+                if shape == "spot" {
+                    let dim = if o.fill > 0.0 { o.fill.min(0.9) } else { 0.65 };
+                    std::fs::write(&path, crate::shapes::spotlight(vw, vh, o.x * vwf, o.y * vhf, (o.w * vwf).max(8.0), (o.h * vhf).max(8.0), if o.shape == "spot" { if o.mode == "rect" { "rect" } else { "ellipse" } } else { "ellipse" }, dim)?)?;
+                    png_layer(&mut g, &mut extra, &mut n_in, &esc_in(&path), rate, (t0, t1), ("0".into(), "0".into()), o, vh, &cur_v, &next, i, "");
+                } else {
+                    let (wpx, hpx) = (((o.w * vwf / 2.0).round() as u32 * 2).max(4), ((o.h * vhf / 2.0).round() as u32 * 2).max(4));
+                    std::fs::write(&path, crate::shapes::png(&crate::shapes::Spec { shape, w: wpx, h: hpx, rgb: rgb(col), fill: o.fill.clamp(0.0, 1.0), outline: true, thick, flipx: o.flipx, flipy: o.flipy, mask: false })?)?;
+                    png_layer(&mut g, &mut extra, &mut n_in, &esc_in(&path), rate, (t0, t1), (format!("W*{}", f(o.x)), format!("H*{}", f(o.y))), o, vh, &cur_v, &next, i, "");
+                }
             }
             "blur" => {
-                // pixelate first so text cannot be read, then soften the blocks
-                let block = match o.level { 1 => 8, 3 => 24, _ => 14 };
-                let (a, b) = (format!("ba{i}"), format!("bb{i}"));
-                g.push(format!("[{cur_v}]split[{a}][{b}]"));
-                g.push(format!("[{b}]crop=trunc(iw*{}/2)*2:trunc(ih*{}/2)*2:iw*{}:ih*{},scale=iw/{blk}:ih/{blk},scale=iw*{blk}:ih*{blk}:flags=neighbor,boxblur={rad}:2[bl{i}]", f(o.w), f(o.h), f(o.x), f(o.y), blk = block, rad = block * 2 / 3));
-                g.push(format!("[{a}][bl{i}]overlay=x=W*{}:y=H*{}:{en}[{next}]", f(o.x), f(o.y)));
+                let shape = if o.shape.is_empty() { "rect" } else { o.shape.as_str() };
+                let (wpx, hpx) = (((o.w * vwf / 2.0).round() as u32 * 2).max(4), ((o.h * vhf / 2.0).round() as u32 * 2).max(4));
+                let (xpx, ypx) = ((o.x * vwf).round() as u32, (o.y * vhf).round() as u32);
+                let mode = if o.mode.is_empty() { "pixel" } else { o.mode.as_str() };
+                if mode == "solid" {
+                    let path = tmp.join(format!("sh{i}.png"));
+                    let col = if o.color.is_empty() { "#000000" } else { &o.color };
+                    std::fs::write(&path, crate::shapes::png(&crate::shapes::Spec { shape, w: wpx, h: hpx, rgb: rgb(col), fill: 1.0, outline: false, thick: 2.0, flipx: false, flipy: false, mask: false })?)?;
+                    png_layer(&mut g, &mut extra, &mut n_in, &esc_in(&path), rate, (t0, t1), (xpx.to_string(), ypx.to_string()), &Overlay { anim: String::new(), opacity: 0.0, ..o.clone() }, vh, &cur_v, &next, i, "");
+                } else {
+                    let block = match o.level { 1 => 8, 3 => 24, _ => 14 };
+                    let sigma = match o.level { 1 => 6, 3 => 22, _ => 12 };
+                    let (a, b) = (format!("ba{i}"), format!("bb{i}"));
+                    g.push(format!("[{cur_v}]split[{a}][{b}]"));
+                    let fx = if mode == "soft" { format!("gblur=sigma={sigma}") } else { format!("scale=iw/{block}:ih/{block},scale=iw*{block}:ih*{block}:flags=neighbor,scale={wpx}:{hpx}:flags=neighbor,boxblur={}:2", block * 2 / 3) };
+                    if shape == "rect" {
+                        g.push(format!("[{b}]crop={wpx}:{hpx}:{xpx}:{ypx},{fx}[bl{i}]"));
+                    } else {
+                        let path = tmp.join(format!("mk{i}.png"));
+                        std::fs::write(&path, crate::shapes::png(&crate::shapes::Spec { shape, w: wpx, h: hpx, rgb: [255; 3], fill: 1.0, outline: false, thick: 2.0, flipx: false, flipy: false, mask: true })?)?;
+                        let idx = n_in;
+                        n_in += 1;
+                        extra.extend(["-loop".into(), "1".into(), "-framerate".into(), f(rate), "-t".into(), f(t1 + 0.1), "-i".into(), esc_in(&path)]);
+                        g.push(format!("[{b}]crop={wpx}:{hpx}:{xpx}:{ypx},{fx},format=yuv420p[bq{i}]"));
+                        g.push(format!("[{idx}:v]format=gray[mk{i}]"));
+                        g.push(format!("[bq{i}][mk{i}]alphamerge[bl{i}]"));
+                    }
+                    g.push(format!("[{a}][bl{i}]overlay=x={xpx}:y={ypx}:{en}:eof_action=pass[{next}]"));
+                }
+            }
+            "image" if !o.path.is_empty() && Path::new(&o.path).exists() => {
+                let wpx = ((if o.w > 0.0 { o.w } else { 0.2 }) * vwf / 2.0).round().max(2.0) as u32 * 2;
+                png_layer(&mut g, &mut extra, &mut n_in, &o.path, rate, (t0, t1), (format!("W*{}", f(o.x)), format!("H*{}", f(o.y))), o, vh, &cur_v, &next, i, &format!("scale={wpx}:-2:flags=lanczos,"));
             }
             _ => continue,
         }
@@ -218,10 +450,54 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
         _ => ("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p".into(), vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"], "mp4"),
     };
     g.push(format!("[{cur_v}]{post}[vout]"));
-    let mut a: Vec<String> = vec!["-i".into(), p.input.clone(), "-filter_complex".into(), g.join(";"), "-map".into(), "[vout]".into()];
-    if has_audio && ext != "gif" {
-        a.extend(["-map".to_string(), format!("[{cur_a}]")]);
-        a.extend(["-c:a", "aac", "-b:a", "192k"].map(String::from));
+    // sounds: effects and music are mixed under or over the video's own sound
+    let mut audio: Option<String> = if has_audio { Some(cur_a.clone()) } else { None };
+    if !gif && !p.sounds.is_empty() {
+        let base = if let Some(a) = &audio { a.clone() } else {
+            g.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={},asetpts=PTS-STARTPTS[abase]", f(total_len)));
+            "abase".to_string()
+        };
+        let mut ins = vec![format!("[{base}]")];
+        for (k, sn) in p.sounds.iter().enumerate() {
+            let (natural, idx) = if sn.kind == "fx" {
+                let (src, d) = fx_source(&sn.fx).ok_or_else(|| anyhow!("Unknown sound effect"))?;
+                extra.extend(["-f".into(), "lavfi".into(), "-i".into(), src]);
+                (d, n_in)
+            } else {
+                if !Path::new(&sn.path).exists() { continue; }
+                extra.extend(["-i".into(), sn.path.clone()]);
+                (ffmpeg::duration(Path::new(&sn.path)).unwrap_or(5.0), n_in)
+            };
+            n_in += 1;
+            let start = (sn.start + off).max(0.0);
+            let want = if sn.end > sn.start { Some(sn.end - sn.start) } else if sn.repeat { Some((total_len - start).max(0.5)) } else { None };
+            let mut ch = format!("[{idx}:a]aresample=48000,aformat=channel_layouts=stereo");
+            if sn.repeat { ch += ",aloop=loop=-1:size=2000000000"; }
+            let len = want.unwrap_or(natural).min(if sn.repeat { 1e9 } else { natural });
+            ch += &format!(",atrim=duration={},asetpts=PTS-STARTPTS", f(len));
+            let fd = sn.fade.clamp(0.0, 5.0).min(len / 2.0);
+            if fd > 0.0 { ch += &format!(",afade=t=in:d={},afade=t=out:st={}:d={}", f(fd), f(len - fd), f(fd)); }
+            ch += &format!(",volume={}", f(if sn.vol > 0.0 { sn.vol.min(3.0) } else { 1.0 }));
+            let ms = (start * 1000.0).round() as i64;
+            ch += &format!(",adelay={ms}|{ms}[sd{k}]");
+            g.push(ch);
+            ins.push(format!("[sd{k}]"));
+        }
+        if ins.len() > 1 {
+            g.push(format!("{}amix=inputs={}:duration=first:normalize=0:dropout_transition=0[amix]", ins.concat(), ins.len()));
+            audio = Some("amix".into());
+        } else if audio.is_none() {
+            audio = None;
+        }
+    }
+    let mut a: Vec<String> = vec!["-i".into(), p.input.clone()];
+    a.extend(extra);
+    a.extend(["-filter_complex".to_string(), g.join(";"), "-map".into(), "[vout]".into()]);
+    if let Some(au) = &audio {
+        if ext != "gif" {
+            a.extend(["-map".to_string(), format!("[{au}]")]);
+            a.extend(["-c:a", "aac", "-b:a", "192k"].map(String::from));
+        }
     }
     a.extend(vcodec.iter().map(|s| s.to_string()));
     if ext == "mp4" {
@@ -231,6 +507,10 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
         a.extend(["-loop", "0"].map(String::from));
     }
     Ok((a, ext))
+}
+
+fn esc_in(p: &Path) -> String {
+    p.to_string_lossy().to_string()
 }
 
 /// A scratch folder name no other job in this process shares.
@@ -264,7 +544,9 @@ pub fn export_to(p: &Project, out: &Path) -> Result<()> {
     let tmp = unique_tmp("recora-edit");
     std::fs::create_dir_all(&tmp)?;
     let fps = ffmpeg::fps(input).unwrap_or(30.0);
-    let (mut args, _ext) = build(p, ffmpeg::has_audio(input), fps, &tmp)?;
+    let mut p = p.clone();
+    if let Some((w, h)) = ffmpeg::size(input) { p.vw = w; p.vh = h; }
+    let (mut args, _ext) = build(&p, ffmpeg::has_audio(input), fps, &tmp)?;
     args.push(out.to_string_lossy().into());
     let r = ffmpeg::run(&args);
     let _ = std::fs::remove_dir_all(&tmp);
@@ -287,11 +569,84 @@ pub fn strip(path: &Path, work: &Path, n: u32) -> Result<PathBuf> {
 }
 
 /// What the smart tools found in a video, all in seconds of the source.
-#[derive(serde::Serialize, Default, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct Analysis {
     pub silences: Vec<(f64, f64)>,
     pub idle: Vec<(f64, f64)>,
     pub scenes: Vec<f64>,
+    /// false when the sound is missing or so quiet that pauses cannot be told from speech
+    pub voice: bool,
+}
+
+/// What polishing would do, worked out from an analysis, in seconds of the source.
+#[derive(serde::Serialize, Default, Debug, Clone)]
+pub struct Plan {
+    pub cuts: Vec<(f64, f64)>,
+    pub fast: Vec<(f64, f64)>,
+    pub speed: f64,
+    pub saved: f64,
+    pub voice: bool,
+}
+
+fn overlap(a: &[(f64, f64)], b: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = vec![];
+    for (s1, e1) in a {
+        for (s2, e2) in b {
+            let (s, e) = (s1.max(*s2), e1.min(*e2));
+            if e > s {
+                out.push((s, e));
+            }
+        }
+    }
+    out.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+    out
+}
+
+/// A careful plan: only dead air goes (nothing said AND nothing changing on screen), still moments with no
+/// speech are fast-forwarded, and the total is capped so a quiet recording is never emptied.
+pub fn plan(a: &Analysis, dur: f64) -> Plan {
+    let mut p = Plan { speed: 4.0, voice: a.voice, ..Default::default() };
+    if dur < 10.0 {
+        return p;
+    }
+    let idle: Vec<(f64, f64)> = a.idle.iter().filter(|(s, e)| e - s >= 2.0).cloned().collect();
+    // dead air: still screen and silent at once
+    let mut cuts: Vec<(f64, f64)> = if a.voice { overlap(&a.silences, &idle).into_iter().filter(|(s, e)| e - s >= 1.5).map(|(s, e)| (if s < 0.3 { 0.0 } else { s + 0.25 }, if e > dur - 0.3 { dur } else { e - 0.25 })).filter(|(s, e)| e - s >= 0.6).collect() } else { vec![] };
+    // still moments that are not dead air: speed them up, but only when nobody is speaking over them
+    let quiet: Vec<(f64, f64)> = if a.voice { a.silences.clone() } else { vec![(0.0, dur)] };
+    let mut fast: Vec<(f64, f64)> = overlap(&idle, &quiet).into_iter().filter(|(s, e)| e - s >= 3.0).map(|(s, e)| (s + 0.5, e - 0.5)).filter(|(s, e)| e - s >= 1.5).collect();
+    // keep fast ranges out of the cuts
+    fast = fast.into_iter().filter(|(s, e)| !cuts.iter().any(|(a, b)| s < b && e > a)).collect();
+    // never take more than half of the recording: keep the biggest wins first
+    let gain = |r: &(f64, f64), cut: bool| if cut { r.1 - r.0 } else { (r.1 - r.0) * 0.75 };
+    let mut all: Vec<(f64, bool, (f64, f64))> = cuts.iter().map(|r| (gain(r, true), true, *r)).chain(fast.iter().map(|r| (gain(r, false), false, *r))).collect();
+    all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    let (mut saved, cap) = (0.0, dur * 0.5);
+    cuts.clear();
+    fast.clear();
+    for (g, is_cut, r) in all {
+        if saved + g > cap {
+            continue;
+        }
+        saved += g;
+        if is_cut { cuts.push(r) } else { fast.push(r) }
+    }
+    cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    fast.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    p.cuts = cuts;
+    p.fast = fast;
+    p.saved = saved;
+    p
+}
+
+/// Loudest and average level of the sound track in dB, when there is one.
+fn levels(path: &Path, low: bool) -> Option<(f64, f64)> {
+    if !ffmpeg::has_audio(path) {
+        return None;
+    }
+    let out = if low { ffmpeg::cmd_low() } else { ffmpeg::cmd() }.args(["-hide_banner", "-nostats", "-i", &path.to_string_lossy(), "-vn", "-af", "volumedetect", "-f", "null", "-"]).output().ok()?;
+    let t = String::from_utf8_lossy(&out.stderr).to_string();
+    Some((num_after(&t, "max_volume:")?, num_after(&t, "mean_volume:")?))
 }
 
 fn num_after(line: &str, key: &str) -> Option<f64> {
@@ -339,8 +694,12 @@ fn detect(path: &Path, scenes_too: bool) -> Result<Analysis> {
     let total = ffmpeg::duration(path).unwrap_or(0.0);
     let p = path.to_string_lossy().to_string();
     let mut a: Vec<String> = vec!["-hide_banner".into(), "-nostats".into(), "-i".into(), p.clone(), "-vf".into(), "scale=320:-2,freezedetect=n=-55dB:d=2".into()];
-    if ffmpeg::has_audio(path) {
-        a.extend(["-af".to_string(), "silencedetect=n=-35dB:d=0.8".to_string()]);
+    // the pause threshold follows how loud this recording is, so a quiet microphone is not mistaken for silence
+    let lv = levels(path, !scenes_too);
+    let voice = matches!(lv, Some((mx, _)) if mx > -42.0);
+    if voice {
+        let thr = (lv.unwrap().0 - 26.0).clamp(-55.0, -30.0);
+        a.extend(["-af".to_string(), format!("silencedetect=n={thr:.0}dB:d=0.8")]);
     }
     a.extend(["-f", "null", "-"].map(String::from));
     let out = if scenes_too { ffmpeg::cmd() } else { ffmpeg::cmd_low() }.args(&a).output()?;
@@ -349,14 +708,14 @@ fn detect(path: &Path, scenes_too: bool) -> Result<Analysis> {
         return Err(anyhow!("analysis failed: {}", text.lines().last().unwrap_or("")));
     }
     if !scenes_too {
-        return Ok(Analysis { silences: pairs(&text, "silence_start:", "silence_end:", total), idle: pairs(&text, "freeze_start:", "freeze_end:", total), scenes: vec![] });
+        return Ok(Analysis { silences: pairs(&text, "silence_start:", "silence_end:", total), idle: pairs(&text, "freeze_start:", "freeze_end:", total), scenes: vec![], voice });
     }
     let out2 = ffmpeg::cmd().args(["-hide_banner", "-nostats", "-i", &p, "-an", "-vf", "select=gt(scene\\,0.3),showinfo", "-f", "null", "-"]).output()?;
     let mut scenes = scene_times(&String::from_utf8_lossy(&out2.stderr));
     // keep scene changes at least 2 s apart
     let mut last = -10.0;
     scenes.retain(|t| { let keep = *t - last >= 2.0 && *t > 0.5; if keep { last = *t; } keep });
-    Ok(Analysis { silences: pairs(&text, "silence_start:", "silence_end:", total), idle: pairs(&text, "freeze_start:", "freeze_end:", total), scenes })
+    Ok(Analysis { silences: pairs(&text, "silence_start:", "silence_end:", total), idle: pairs(&text, "freeze_start:", "freeze_end:", total), scenes, voice })
 }
 
 #[cfg(test)]
@@ -369,7 +728,110 @@ mod tests {
         p.to_string_lossy().into()
     }
     fn proj(input: String) -> Project {
-        Project { input, clips: vec![Clip { start: 0.0, end: 2.0, speed: 1.0 }, Clip { start: 3.0, end: 6.0, speed: 2.0 }], transition: Transition { kind: "fade".into(), dur: 0.5 }, overlays: vec![], preset: String::new() }
+        Project { input, clips: vec![Clip { start: 0.0, end: 2.0, speed: 1.0 }, Clip { start: 3.0, end: 6.0, speed: 2.0 }], transition: Transition { kind: "fade".into(), dur: 0.5 }, overlays: vec![], preset: String::new(), ..Default::default() }
+    }
+
+    fn clip_with(dir: &Path, name: &str, video: &str, audio: Option<&str>, secs: u32) -> String {
+        let p = dir.join(name);
+        let mut a: Vec<String> = ["-f", "lavfi", "-i"].map(String::from).to_vec();
+        a.push(format!("{video}:d={secs}"));
+        if let Some(au) = audio {
+            a.extend(["-f", "lavfi", "-i"].map(String::from));
+            a.push(format!("{au}:d={secs}"));
+        }
+        a.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p"].map(String::from));
+        if audio.is_some() {
+            a.extend(["-c:a", "aac", "-shortest"].map(String::from));
+        }
+        a.push(p.to_string_lossy().into());
+        ffmpeg::run(&a).unwrap();
+        p.to_string_lossy().into()
+    }
+
+    #[test]
+    fn polish_never_empties_a_quiet_recording() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("plan1");
+        // a still screen with a silent sound track: nothing is said, so nothing may be cut
+        let p = clip_with(&d, "still.mp4", "color=c=navy:s=320x180:r=15", Some("anullsrc=r=44100:cl=mono"), 40);
+        let a = analyze_quick(Path::new(&p)).unwrap();
+        assert!(!a.voice, "silent track must not count as voice");
+        let pl = plan(&a, 40.0);
+        assert!(pl.cuts.is_empty(), "cuts {:?}", pl.cuts);
+        assert!(pl.saved <= 20.0 + 1e-6, "saved {}", pl.saved);
+        // very quiet but real speech-like tone: still not treated as silence
+        let q = clip_with(&d, "quiet.mp4", "testsrc2=size=320x180:rate=15", Some("aevalsrc=0.02*sin(2*PI*300*t):s=44100"), 20);
+        let a2 = analyze_quick(Path::new(&q)).unwrap();
+        assert!(a2.silences.is_empty(), "silences {:?}", a2.silences);
+    }
+
+    #[test]
+    fn polish_removes_dead_air_but_keeps_narration_over_a_still_screen() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("plan2");
+        // 0-10 s talking, 10-24 s nothing at all, 24-34 s talking, the screen never changes
+        let p = clip_with(&d, "dead.mp4", "color=c=navy:s=320x180:r=15", Some("aevalsrc=if(lt(t\\,10)+gt(t\\,24)\\,0.5*sin(2*PI*440*t)\\,0):s=44100"), 34);
+        let a = analyze_quick(Path::new(&p)).unwrap();
+        assert!(a.voice);
+        let pl = plan(&a, 34.0);
+        assert_eq!(pl.cuts.len(), 1, "{:?} {:?}", a, pl);
+        let (s, e) = pl.cuts[0];
+        assert!(s > 9.5 && s < 11.5 && e > 22.5 && e < 24.5, "cut {s}-{e}");
+        assert!(pl.fast.is_empty(), "narration must not be sped up: {:?}", pl.fast);
+    }
+
+    #[test]
+    fn plan_is_capped() {
+        let a = Analysis { silences: vec![(0.0, 100.0)], idle: vec![(0.0, 100.0)], scenes: vec![], voice: true };
+        let pl = plan(&a, 100.0);
+        assert!(pl.saved <= 50.0 + 1e-6);
+        assert!(plan(&a, 8.0).cuts.is_empty());
+    }
+
+    #[test]
+    fn exports_shapes_images_sounds_and_title_cards() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("rich");
+        let src = sample(&d);
+        let img = d.join("pic.png");
+        ffmpeg::run(&["-f", "lavfi", "-i", "color=c=green:s=120x80:d=1", "-frames:v", "1", img.to_str().unwrap()]).unwrap();
+        let mut p = proj(src);
+        p.transition = Transition { kind: "fade".into(), dur: 0.4 };
+        let o = |kind: &str, shape: &str| Overlay { kind: kind.into(), shape: shape.into(), start: 0.5, end: 3.0, x: 0.2, y: 0.2, w: 0.3, h: 0.3, color: "#ff3b30".into(), level: 2, bg: true, ..Default::default() };
+        p.overlays = vec![
+            Overlay { fill: 0.25, thick: 0.01, anim: "fade".into(), ..o("box", "ellipse") },
+            Overlay { shape: "arrow".into(), flipx: true, anim: "slide".into(), ..o("box", "arrow") },
+            o("box", "round"),
+            Overlay { fill: 0.7, mode: "ellipse".into(), ..o("box", "spot") },
+            Overlay { mode: "pixel".into(), ..o("blur", "ellipse") },
+            Overlay { mode: "soft".into(), x: 0.6, ..o("blur", "round") },
+            Overlay { mode: "solid".into(), color: "#000000".into(), x: 0.1, y: 0.6, w: 0.2, h: 0.1, ..o("blur", "rect") },
+            Overlay { path: img.to_string_lossy().into(), w: 0.15, x: 0.7, y: 0.05, opacity: 0.8, anim: "fade".into(), ..o("image", "") },
+            Overlay { kind: "text".into(), text: "Banner".into(), style: "banner".into(), size: 0.07, y: 0.7, x: 0.1, color: "#ffffff".into(), anim: "slide".into(), ..o("text", "") },
+            Overlay { kind: "text".into(), text: "Outlined".into(), style: "outline".into(), size: 0.07, y: 0.4, x: 0.1, color: "#ffffff".into(), ..o("text", "") },
+        ];
+        p.sounds = vec![
+            Sound { kind: "fx".into(), fx: "ding".into(), start: 1.0, vol: 0.8, ..Default::default() },
+            Sound { kind: "fx".into(), fx: "pad".into(), start: 0.0, end: 0.0, repeat: true, vol: 0.3, fade: 0.5, ..Default::default() },
+            Sound { kind: "fx".into(), fx: "whoosh".into(), start: 2.0, ..Default::default() },
+        ];
+        p.intro = Some(Card { text: "Title".into(), sub: "Sub".into(), dur: 2.0, bg: "#f2f2f7".into(), accent: "#0a84ff".into() });
+        p.outro = Some(Card { text: "Thanks".into(), dur: 2.0, ..Default::default() });
+        let out = d.join("rich.mp4");
+        export_to(&p, &out).unwrap();
+        if let Ok(k) = std::env::var("RECORA_KEEP") { let _ = std::fs::copy(&out, k); }
+        let dur = ffmpeg::duration(&out).unwrap();
+        // 2 + (2 + 1.5 - 0.4) + 2 minus two more joins of 0.4
+        assert!((dur - 6.3).abs() < 0.7, "duration {dur}");
+        assert!(ffmpeg::has_audio(&out));
+        // a sound added to a video that has none still produces sound
+        let silent = clip_with(&d, "mute.mp4", "testsrc2=size=320x180:rate=15", None, 6);
+        let mut q = proj(silent);
+        q.sounds = vec![Sound { kind: "fx".into(), fx: "success".into(), start: 1.0, ..Default::default() }];
+        let out2 = d.join("snd.mp4");
+        export_to(&q, &out2).unwrap();
+        assert!(ffmpeg::has_audio(&out2));
+        assert!(fx_source("nope").is_none());
     }
 
     #[test]
@@ -398,9 +860,9 @@ mod tests {
         let d = tempfile_dir("edit1");
         let mut p = proj(sample(&d));
         p.overlays = vec![
-            Overlay { kind: "text".into(), start: 0.2, end: 2.0, x: 0.1, y: 0.8, w: 0.0, h: 0.0, text: "Hello: it's 100% fine".into(), size: 0.06, color: "#ffffff".into(), level: 0, bg: false },
-            Overlay { kind: "box".into(), start: 0.0, end: 3.0, x: 0.1, y: 0.1, w: 0.3, h: 0.2, text: String::new(), size: 0.0, color: "#ff3b30".into(), level: 0, bg: true },
-            Overlay { kind: "blur".into(), start: 0.0, end: 3.0, x: 0.5, y: 0.5, w: 0.3, h: 0.3, text: String::new(), size: 0.0, color: String::new(), level: 3, bg: true },
+            Overlay { kind: "text".into(), start: 0.2, end: 2.0, x: 0.1, y: 0.8, w: 0.0, h: 0.0, text: "Hello: it's 100% fine".into(), size: 0.06, color: "#ffffff".into(), level: 0, bg: false, ..Default::default() },
+            Overlay { kind: "box".into(), start: 0.0, end: 3.0, x: 0.1, y: 0.1, w: 0.3, h: 0.2, text: String::new(), size: 0.0, color: "#ff3b30".into(), level: 0, bg: true, ..Default::default() },
+            Overlay { kind: "blur".into(), start: 0.0, end: 3.0, x: 0.5, y: 0.5, w: 0.3, h: 0.3, text: String::new(), size: 0.0, color: String::new(), level: 3, bg: true, ..Default::default() },
         ];
         let out = export(&p).unwrap();
         let dur = ffmpeg::duration(&out).unwrap();
