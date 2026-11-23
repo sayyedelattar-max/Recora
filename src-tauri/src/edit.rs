@@ -101,6 +101,9 @@ pub struct Sound {
     /// repeat to fill the time (music)
     #[serde(default)]
     pub repeat: bool,
+    /// background music: it is lowered while someone speaks when ducking is on
+    #[serde(default)]
+    pub music: bool,
 }
 
 /// A title card added before or after the video.
@@ -137,6 +140,17 @@ pub struct Project {
     pub intro: Option<Card>,
     #[serde(default)]
     pub outro: Option<Card>,
+    /// clean steady background noise from the recording's own sound
+    #[serde(default)]
+    pub denoise: bool,
+    /// lower the music while the recording's own sound has speech
+    #[serde(default)]
+    pub duck: bool,
+    /// seconds of fade from and to black at the start and end (sound fades too)
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
     /// size of the source picture; filled in on export
     #[serde(default)]
     pub vw: u32,
@@ -352,6 +366,10 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
         cur_v = "cv".into();
         cur_a = "ca".into();
     }
+    if has_audio && p.denoise {
+        g.push(format!("[{cur_a}]highpass=f=70,afftdn=nr=14:nf=-28:tn=1[adn]"));
+        cur_a = "adn".into();
+    }
     // overlays on the edited timeline
     let font = font_file();
     for (i, o) in p.overlays.iter().enumerate() {
@@ -359,7 +377,7 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
         let en = format!("enable='between(t,{},{})'", f(t0), f(t1));
         let next = format!("o{i}");
         let (vwf, vhf) = (vw as f64, vh as f64);
-        let anim = o.anim == "fade" || o.anim == "slide";
+        let anim = o.anim == "fade" || o.anim == "slide" || o.anim == "pop";
         let fade_a = format!("alpha='min(1\\,max(0\\,(t-{})/0.3))*min(1\\,max(0\\,({}-t)/0.3))'", f(t0), f(t1));
         match o.kind.as_str() {
             "text" if !o.text.trim().is_empty() => {
@@ -373,7 +391,8 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
                 if o.anim == "slide" {
                     ty = format!("h*{}+(1-min(1\\,max(0\\,(t-{})/0.35)))*h*0.04", f(o.y), f(t0));
                 }
-                let mut dt = format!("drawtext={ff}textfile='{tf}':fontsize=h*{}:fontcolor={}:x=w*{}:y='{ty}'", f(size), colour(&o.color), f(o.x));
+                let fs = if o.anim == "pop" { format!("'h*{}*(0.6+0.4*min(1\\,max(0\\,(t-{})/0.25)))'", f(size), f(t0)) } else { format!("h*{}", f(size)) };
+                let mut dt = format!("drawtext={ff}textfile='{tf}':fontsize={fs}:fontcolor={}:x=w*{}:y='{ty}'", colour(&o.color), f(o.x));
                 match style {
                     "box" => dt += &format!(":box=1:boxcolor={boxc}@0.6:boxborderw=14"),
                     "outline" => dt += &format!(":borderw={}:bordercolor=black", ((vhf * 0.004).round()).max(2.0)),
@@ -433,6 +452,15 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
                     g.push(format!("[{a}][bl{i}]overlay=x={xpx}:y={ypx}:{en}:eof_action=pass[{next}]"));
                 }
             }
+            "zoom" => {
+                let (wpx, hpx) = (((o.w * vwf / 2.0).round() as u32 * 2).max(16), ((o.h * vhf / 2.0).round() as u32 * 2).max(16));
+                let (xpx, ypx) = (((o.x * vwf).round() as u32).min(vw.saturating_sub(wpx)), ((o.y * vhf).round() as u32).min(vh.saturating_sub(hpx)));
+                let (a, b) = (format!("za{i}"), format!("zb{i}"));
+                let d = 0.3f64.min((t1 - t0) / 3.0);
+                g.push(format!("[{cur_v}]split[{a}][{b}]"));
+                g.push(format!("[{b}]crop={wpx}:{hpx}:{xpx}:{ypx},scale={vw}:{vh}:flags=lanczos,setsar=1,format=rgba,fade=t=in:st={}:d={}:alpha=1,fade=t=out:st={}:d={}:alpha=1[zz{i}]", f(t0), f(d), f((t1 - d).max(t0)), f(d)));
+                g.push(format!("[{a}][zz{i}]overlay=0:0:{en}:eof_action=pass[{next}]"));
+            }
             "image" if !o.path.is_empty() && Path::new(&o.path).exists() => {
                 let wpx = ((if o.w > 0.0 { o.w } else { 0.2 }) * vwf / 2.0).round().max(2.0) as u32 * 2;
                 png_layer(&mut g, &mut extra, &mut n_in, &o.path, rate, (t0, t1), (format!("W*{}", f(o.x)), format!("H*{}", f(o.y))), o, vh, &cur_v, &next, i, &format!("scale={wpx}:-2:flags=lanczos,"));
@@ -449,9 +477,17 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
         "vertical" => ("split[sa][sb];[sa]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=30:5[bgv];[sb]scale=1080:-2[fgv];[bgv][fgv]overlay=(W-w)/2:(H-h)/2,format=yuv420p".into(), vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"], "mp4"),
         _ => ("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p".into(), vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"], "mp4"),
     };
+    let fi = p.fade_in.clamp(0.0, 3.0);
+    let fo = p.fade_out.clamp(0.0, 3.0);
+    let mut post = post;
+    if ext != "gif" {
+        if fi > 0.0 { post += &format!(",fade=t=in:st=0:d={}", f(fi)); }
+        if fo > 0.0 { post += &format!(",fade=t=out:st={}:d={}", f((total_len - fo).max(0.0)), f(fo)); }
+    }
     g.push(format!("[{cur_v}]{post}[vout]"));
     // sounds: effects and music are mixed under or over the video's own sound
     let mut audio: Option<String> = if has_audio { Some(cur_a.clone()) } else { None };
+    let mut music_ins: Vec<String> = vec![];
     if !gif && !p.sounds.is_empty() {
         let base = if let Some(a) = &audio { a.clone() } else {
             g.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={},asetpts=PTS-STARTPTS[abase]", f(total_len)));
@@ -481,13 +517,30 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
             let ms = (start * 1000.0).round() as i64;
             ch += &format!(",adelay={ms}|{ms}[sd{k}]");
             g.push(ch);
-            ins.push(format!("[sd{k}]"));
+            if sn.music && p.duck && has_audio { music_ins.push(format!("[sd{k}]")); } else { ins.push(format!("[sd{k}]")); }
+        }
+        if !music_ins.is_empty() {
+            // the voice drives the compressor that lowers the music, and is also heard on its own
+            let mixed = if music_ins.len() > 1 { g.push(format!("{}amix=inputs={}:duration=longest:normalize=0[mus]", music_ins.concat(), music_ins.len())); "mus" } else { g.push(format!("{}anull[mus]", music_ins[0])); "mus" };
+            g.push(format!("[{base}]asplit[vo1][vo2]"));
+            g.push(format!("[{mixed}][vo2]sidechaincompress=threshold=0.02:ratio=10:attack=30:release=600:makeup=1[duck]"));
+            ins[0] = "[vo1]".into();
+            ins.push("[duck]".into());
         }
         if ins.len() > 1 {
             g.push(format!("{}amix=inputs={}:duration=first:normalize=0:dropout_transition=0[amix]", ins.concat(), ins.len()));
             audio = Some("amix".into());
         } else if audio.is_none() {
             audio = None;
+        }
+    }
+    if let Some(au) = audio.clone() {
+        if ext != "gif" && (fi > 0.0 || fo > 0.0) {
+            let mut ch = format!("[{au}]anull");
+            if fi > 0.0 { ch += &format!(",afade=t=in:st=0:d={}", f(fi)); }
+            if fo > 0.0 { ch += &format!(",afade=t=out:st={}:d={}", f((total_len - fo).max(0.0)), f(fo)); }
+            g.push(format!("{ch}[afin]"));
+            audio = Some("afin".into());
         }
     }
     let mut a: Vec<String> = vec!["-i".into(), p.input.clone()];
@@ -832,6 +885,24 @@ mod tests {
         export_to(&q, &out2).unwrap();
         assert!(ffmpeg::has_audio(&out2));
         assert!(fx_source("nope").is_none());
+    }
+
+    #[test]
+    fn exports_denoise_ducking_fades_zoom_and_pop() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("duck");
+        let src = sample(&d);
+        let mut p = proj(src);
+        p.denoise = true; p.duck = true; p.fade_in = 0.5; p.fade_out = 0.5;
+        p.sounds = vec![Sound { kind: "fx".into(), fx: "pad".into(), start: 0.0, repeat: true, music: true, vol: 0.3, fade: 1.0, ..Default::default() }];
+        p.overlays = vec![
+            Overlay { kind: "zoom".into(), start: 1.0, end: 3.0, x: 0.1, y: 0.1, w: 0.4, h: 0.4, ..Default::default() },
+            Overlay { kind: "text".into(), text: "Pop".into(), anim: "pop".into(), start: 0.5, end: 3.0, x: 0.1, y: 0.5, size: 0.08, color: "#ffffff".into(), bg: true, ..Default::default() },
+        ];
+        let out = d.join("duck.mp4");
+        export_to(&p, &out).unwrap();
+        assert!(ffmpeg::has_audio(&out));
+        assert!(ffmpeg::duration(&out).unwrap() > 1.0);
     }
 
     #[test]

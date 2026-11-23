@@ -4,6 +4,7 @@
   Object.assign(ICONS, {
     text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>',
     box: '<rect x="4" y="6" width="16" height="12" rx="2.5"/>',
+    zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4M11 8.5v5M8.5 11h5"/>',
     image: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.4"/><path d="M5 17l4.5-4.5 3 3 2.5-2.5L20 17"/>',
     sound: '<path d="M4 10v4h3l4 3.5v-11L7 10H4zM15 9.5a3.5 3.5 0 010 5M17.5 7a7 7 0 010 10"/>',
     blur: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M8 10h8M8 14h5" opacity=".55"/>',
@@ -16,6 +17,7 @@
   const BLUR_SHAPES = [["rect", "Rectangle"], ["round", "Rounded"], ["ellipse", "Ellipse"]];
   const TXT_STYLES = [["plain", "Plain"], ["box", "Box"], ["outline", "Outline"], ["banner", "Banner"]];
   const ANIMS = [["none", "None"], ["fade", "Fade"], ["slide", "Slide"]];
+  const TEXT_ANIMS = [...ANIMS, ["pop", "Pop"]];
   const FX = [["click", "Click", 0.12], ["pop", "Pop", 0.3], ["notify", "Notification", 0.5], ["success", "Success", 0.6], ["ding", "Ding", 1.4], ["whoosh", "Whoosh", 0.8]];
   const MUSIC = [["pad", "Calm pad"], ["pulse", "Light pulse"]];
   const AUDIO_EXT = ["mp3", "wav", "m4a", "aac", "ogg", "flac"], IMAGE_EXT = ["png", "jpg", "jpeg", "webp"];
@@ -29,11 +31,11 @@
   window.openEditor = function (it, onDone, opts = {}) {
     closeEditor();
     const dur = it.duration || 1;
-    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, t: 0, playing: false, zoom: 1, strip: "", ar: 16 / 9, busy: false };
+    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", ar: 16 / 9, busy: false };
     const hist = [];
-    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro });
+    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro, a: [st.dn, st.duck, st.fi, st.fo] });
     const push = () => { hist.push(snap()); if (hist.length > 60) hist.shift(); };
-    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.intro = d.i || null; st.outro = d.u || null; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
+    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.intro = d.i || null; st.outro = d.u || null; if (d.a) [st.dn, st.duck, st.fi, st.fo] = d.a; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
 
     const len = (c) => (c.end - c.start) / c.speed;
     const total = () => st.clips.reduce((s, c) => s + len(c), 0);
@@ -128,6 +130,8 @@
           if (sh === "arrow" || sh === "line") { n.style.border = "0"; n.style.background = "transparent"; art.innerHTML = arrowSvg(w, h, th, sh === "arrow", o.flipx, o.flipy, o.color || "#ffcc00"); }
           else if (sh === "spot") { n.style.border = "1.5px dashed rgba(255,255,255,.8)"; n.style.background = "transparent"; n.style.borderRadius = o.mode === "rect" ? "2px" : "50%"; art.innerHTML = ""; }
           else { art.innerHTML = ""; n.style.border = `${th}px solid ${o.color || "#ffcc00"}`; n.style.background = o.fill > 0 ? rgba(o.color || "#ffcc00", o.fill) : "transparent"; n.style.borderRadius = rad; n.style.boxSizing = "border-box"; }
+        } else if (o.kind === "zoom") {
+          n.style.border = "2px dashed #fff"; n.style.background = "rgba(255,255,255,.08)"; n.style.borderRadius = "3px"; n.style.boxShadow = "0 0 0 1px rgba(0,0,0,.35)";
         } else {
           n.style.borderRadius = rad;
           if (o.mode === "solid") { n.style.background = o.color || "#000"; n.style.backdropFilter = ""; n.style.webkitBackdropFilter = ""; n.style.border = "0"; }
@@ -248,7 +252,7 @@
       const laneEnd = [], lane = new Map();
       st.ov.slice().sort((a, b) => a.start - b.start).forEach((o) => { let l = laneEnd.findIndex((x) => x <= o.start + 0.001); if (l < 0) l = laneEnd.length; laneEnd[l] = o.end; lane.set(o.id, l); });
       const lanes = Math.max(1, laneEnd.length);
-      const bars = st.ov.map((o) => `<div class="ob ${o.kind}${o.id === st.selOv ? " sel" : ""}" data-id="${o.id}" style="left:${o.start * k}px;width:${Math.max(8, (o.end - o.start) * k)}px;top:${lane.get(o.id) * 22}px"><i class="eh l"></i><span>${o.kind === "text" ? esc(o.text || "Text") : o.kind === "box" ? (BOX_SHAPES.find(([v]) => v === (o.shape || "rect")) || [0, "Highlight"])[1] : o.kind === "image" ? esc(o.name || "Picture") : o.kind === "sound" ? esc(o.name || "Sound") : "Blur"}</span><i class="eh r"></i></div>`).join("");
+      const bars = st.ov.map((o) => `<div class="ob ${o.kind}${o.id === st.selOv ? " sel" : ""}" data-id="${o.id}" style="left:${o.start * k}px;width:${Math.max(8, (o.end - o.start) * k)}px;top:${lane.get(o.id) * 22}px"><i class="eh l"></i><span>${o.kind === "text" ? esc(o.text || "Text") : o.kind === "box" ? (BOX_SHAPES.find(([v]) => v === (o.shape || "rect")) || [0, "Highlight"])[1] : o.kind === "image" ? esc(o.name || "Picture") : o.kind === "sound" ? esc(o.name || "Sound") : o.kind === "zoom" ? "Zoom" : "Blur"}</span><i class="eh r"></i></div>`).join("");
       tlEl.innerHTML = `<div class="tl-in" style="width:${W + 24}px"><div class="tl-ruler" id="ruler">${ticks}</div><div class="tl-clips" id="tcl">${clips}${joins}</div><div class="tl-ovs" id="tov" style="height:${lanes * 22 + 6}px">${bars || `<em>Add text, a highlight or a blur from the side panel</em>`}</div><i class="ph2" id="ph2"></i></div>`;
       tlEl.querySelector(".tl-in").style.setProperty("--k", k);
       wireTl(k); paintHead();
@@ -440,8 +444,9 @@
         async run(p) { const t = p.text.replace(/\{name\}/g, it.name).trim(); if (!t) return "No text"; st.intro = { text: t, sub: p.sub || "", dur: 3 }; return "Opening card added"; } },
       endcard: { label: "Closing card", hint: "A card after the video", params: [{ k: "text", label: "Text", text: true, def: "Thanks for watching" }, { k: "sub", label: "Smaller line", text: true, def: "" }],
         async run(p) { const t = p.text.trim(); if (!t) return "No text"; st.outro = { text: t, sub: p.sub || "", dur: 3 }; return "Closing card added"; } },
+      denoise: { label: "Clean noise", hint: "Reduces steady background noise such as a fan or air conditioning", params: [], async run() { st.dn = true; return "Noise cleaning on"; } },
       music: { label: "Background music", hint: "A calm generated track under the whole video, quiet and faded", params: [{ k: "track", label: "Track", select: [["pad", "Calm pad"], ["pulse", "Light pulse"]], def: "pad" }, N("vol", "Volume", "%", 25, 5, 100, 5)],
-        async run(p) { const T = total(); st.ov.push({ id: uid++, kind: "sound", snd: "fx", fx: p.track, name: p.track === "pad" ? "Calm pad" : "Light pulse", music: true, repeat: true, start: 0, end: r2(T), x: 0, y: 0, w: 0, h: 0, vol: p.vol / 100, fade: 1 }); return "Music added"; } },
+        async run(p) { const T = total(); st.ov.push({ id: uid++, kind: "sound", snd: "fx", fx: p.track, name: p.track === "pad" ? "Calm pad" : "Light pulse", music: true, repeat: true, start: 0, end: r2(T), x: 0, y: 0, w: 0, h: 0, vol: p.vol / 100, fade: 1 }); st.duck = true; return "Music added"; } },
       output: { label: "Save as", hint: "The format of the finished video", params: [{ k: "preset", label: "Format", select: [["", "Original quality"], ["youtube", "YouTube"], ["small", "Small file"], ["vertical", "Vertical (phone)"], ["gif", "GIF"]], def: "" }],
         async run(p) { st.preset = p.preset; return "Format: " + (PRESETS.find(([k]) => k === p.preset) || [0, "Original"])[1]; } },
     };
@@ -451,7 +456,7 @@
       { id: "social", name: "Short for social", desc: "A vertical clip of about a minute", steps: [mk("polish"), mk("fit", { sec: 60 }), mk("output", { preset: "vertical" })] },
       { id: "highlights", name: "My marked moments", desc: "Only what you marked while recording", steps: [mk("markers"), mk("transition"), mk("output", { preset: "youtube" })] },
       { id: "share", name: "Quick share", desc: "Smaller and shorter, ready to send", steps: [mk("polish"), mk("output", { preset: "small" })] },
-      { id: "intro", name: "Finished video", desc: "Tidy up, add title cards and smooth joins, ready to share", steps: [mk("polish"), mk("title"), mk("endcard"), mk("transition"), { ...mk("music"), on: false }] },
+      { id: "intro", name: "Finished video", desc: "Tidy up, add title cards and smooth joins, ready to share", steps: [mk("polish"), { ...mk("denoise"), on: false }, mk("title"), mk("endcard"), mk("transition"), { ...mk("music"), on: false }] },
     ];
     const loadMine = () => { try { return JSON.parse(localStorage.getItem("recora.recipes") || "[]"); } catch (e) { return []; } };
     const saveMine = (a) => { try { localStorage.setItem("recora.recipes", JSON.stringify(a)); } catch (e) { toast("Could not save the recipe here", true); } };
@@ -514,8 +519,8 @@
         <div class="label sm">Smart tools</div>
         <div class="smart"><button class="sm-b" data-smart="silence"><b>Remove silences</b><span>Cuts every pause longer than a moment</span></button><button class="sm-b" data-smart="idle"><b>Speed up still screen</b><span>Fast-forwards while nothing changes</span></button><button class="sm-b" data-smart="scenes"><b>Find scenes</b><span>Splits where the picture changes</span></button></div>
         <div class="label sm">Add to the video</div>
-        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>
-        ${cardsCard()}
+        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="zoom">${I("zoom")}Zoom</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>
+        ${cardsCard()}${audioCard()}
         ${o ? ovCard(o) : ""}
         ${c ? `<div class="label sm">Selected piece</div><div class="card"><div class="row2"><span>Speed</span><div class="seg fit" id="sp">${SPEEDS.map((s) => `<button data-s="${s}" class="${c.speed === s ? "on" : ""}">${s}×</button>`).join("")}</div></div><div class="row2"><span>Length</span><span class="muted">${fmt(len(c))}</span></div></div>` : ""}
         <div class="label sm">Transition between pieces</div>
@@ -536,12 +541,12 @@
     }
     const SW = (list, cur, attr) => list.map((x) => `<button class="sw${x === cur ? " on" : ""}" ${attr}="${x}" style="background:${x}"></button>`).join("");
     const sg = (field, opts, cur) => `<div class="seg fit">${opts.map(([v, n]) => `<button data-o="${field}" data-v="${v}" class="${String(cur) === String(v) ? "on" : ""}">${n}</button>`).join("")}</div>`;
-    const KIND_NAME = { text: "Text", box: "Highlight", blur: "Blur", image: "Picture", sound: "Sound" };
+    const KIND_NAME = { text: "Text", box: "Highlight", blur: "Blur", image: "Picture", sound: "Sound", zoom: "Zoom" };
     function ovCard(o) {
       const tm = `<div class="row2"><span>From</span><input class="num" type="number" id="o-s" min="0" step="0.1" value="${o.start.toFixed(1)}"><span>to</span><input class="num" type="number" id="o-e" min="0" step="0.1" value="${o.end.toFixed(1)}"></div><div class="row2"><button class="btn sm" id="o-here">Start here</button><button class="btn sm" id="o-end">End here</button></div>`;
       const foot = `<div class="row2"><button class="btn sm" id="o-dup">Duplicate</button><button class="btn sm" id="o-del">${I("trash")}Remove</button></div>`;
       const pos = `<div class="row2"><span>Position</span><div class="al" id="o-al">${[["l", "Left"], ["c", "Centre"], ["r", "Right"], ["t", "Top"], ["m", "Middle"], ["b", "Bottom"]].map(([k, n]) => `<button data-a="${k}" title="${n}">${n[0]}</button>`).join("")}</div></div>`;
-      const anim = `<div class="row2"><span>Appears</span>${sg("anim", ANIMS, o.anim || "none")}</div>`;
+      const anim = `<div class="row2"><span>Appears</span>${sg("anim", o.kind === "text" ? TEXT_ANIMS : ANIMS, o.anim || "none")}</div>`;
       const colour = (label, key, cur) => `<div class="row2"><span>${label}</span><div class="sws">${SW(COLORS, cur, "data-c")}<input type="color" class="cp" id="o-cc" value="${cur || "#ffcc00"}"></div></div>`;
       let body = "";
       if (o.kind === "text") {
@@ -562,6 +567,8 @@
           <div class="row2"><span>Effect</span>${sg("mode", [["pixel", "Pixelate"], ["soft", "Soft"], ["solid", "Cover"]], mode)}</div>
           ${mode === "solid" ? colour("Colour", "color", o.color || "#000000") : `<div class="row2"><span>Strength</span>${sg("level", [[1, "Light"], [2, "Medium"], [3, "Strong"]], o.level || 2)}</div>`}
           <p class="ai-note" style="margin:0">Pixelate and Cover make the text underneath unreadable. Soft is gentler.</p>${pos}`;
+      } else if (o.kind === "zoom") {
+        body = `<p class="ai-note" style="margin:0">While this shows, the video zooms into the dashed area, then returns. Drag and resize the area on the picture.</p>${pos}`;
       } else if (o.kind === "image") {
         body = `<div class="row2"><span>Size</span><input type="range" id="o-iw" min="0.04" max="1" step="0.01" value="${o.w || 0.2}"></div><div class="row2"><span>Opacity</span><input type="range" id="o-op" min="0.1" max="1" step="0.05" value="${o.opacity > 0 ? o.opacity : 1}"></div>${anim}${pos}<div class="row2"><button class="btn sm" id="o-swap">Choose another picture</button></div>`;
       } else {
@@ -608,7 +615,17 @@
       const row = (key, label, def) => { const c = st[key]; return `<div class="row2"><span>${label}</span><button class="switch${c ? " on" : ""}" data-card="${key}" role="switch" aria-checked="${!!c}"></button></div>${c ? `<input class="txt wide" data-ct="${key}|text" dir="auto" placeholder="Title" value="${esc(c.text)}"><input class="txt wide" data-ct="${key}|sub" dir="auto" placeholder="Smaller line (optional)" value="${esc(c.sub)}">` : ""}`; };
       return `<div class="label sm">Title cards</div><div class="card">${row("intro", "Opening")}${row("outro", "Closing")}${st.intro || st.outro ? `<div class="row2"><span>Background</span><div class="sws">${SW(CARD_BG, st.cardc.bg, "data-cbg")}</div></div><div class="row2"><span>Accent</span><div class="sws">${SW(CARD_AC, st.cardc.accent, "data-cac")}</div></div><p class="ai-note" style="margin:0">Added at export, about 3 seconds each. Nothing in the picture above changes.</p>` : `<p class="ai-note" style="margin:0">A plain card with your words before or after the video.</p>`}</div>`;
     }
+    const FADES = [[0, "None"], [0.5, "Short"], [1, "Medium"], [2, "Long"]];
+    const fseg = (k, cur) => `<div class="seg fit">${FADES.map(([v, n]) => `<button data-fd="${k}" data-v="${v}" class="${cur === v ? "on" : ""}">${n}</button>`).join("")}</div>`;
+    function audioCard() {
+      const hasMusic = st.ov.some((o) => o.kind === "sound" && o.music);
+      return `<div class="label sm">Sound and ending</div><div class="card"><div class="row2"><span>Clean background noise</span><button class="switch${st.dn ? " on" : ""}" data-aud="dn" role="switch" aria-checked="${st.dn}"></button></div>
+        ${hasMusic ? `<div class="row2"><span>Lower music while I speak</span><button class="switch${st.duck ? " on" : ""}" data-aud="duck" role="switch" aria-checked="${st.duck}"></button></div>` : ""}
+        <div class="row2"><span>Fade in</span>${fseg("fi", st.fi)}</div><div class="row2"><span>Fade out</span>${fseg("fo", st.fo)}</div></div>`;
+    }
     function wireCards() {
+      $$("[data-aud]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.aud] = !st[b.dataset.aud]; drawSide(); }));
+      $$("[data-fd]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.fd] = +b.dataset.v; drawSide(); }));
       $$("[data-card]", side).forEach((b) => (b.onclick = () => { push(); const k = b.dataset.card; st[k] = st[k] ? null : { text: k === "intro" ? it.name : "Thanks for watching", sub: "", dur: 3 }; drawSide(); }));
       $$("[data-ct]", side).forEach((i) => { const [k, f] = i.dataset.ct.split("|"); i.onkeydown = (ev) => ev.stopPropagation(); i.onfocus = push; i.oninput = () => { st[k][f] = i.value; }; });
       $$("[data-cbg]", side).forEach((b) => (b.onclick = () => { st.cardc.bg = b.dataset.cbg; drawSide(); }));
@@ -647,6 +664,7 @@
       if (kind === "text") { base.text = "Your text"; base.y = 0.78; base.x = 0.08; base.style = "box"; }
       if (kind === "box") { base.fill = 0; base.thick = 0.006; }
       if (kind === "blur") { base.x = 0.35; base.y = 0.35; base.mode = "pixel"; }
+      if (kind === "zoom") { base.x = 0.3; base.y = 0.25; base.w = 0.4; base.h = 0.5; base.end = r2(Math.min(T, s + 4)); }
       if (pos) { base.x = clamp(pos.x - (kind === "text" ? 0.02 : base.w / 2), 0, 0.9); base.y = clamp(pos.y - (kind === "text" ? 0.03 : base.h / 2), 0, 0.9); }
       st.ov.push(base); st.selOv = base.id; st.sel = -1; draw();
       const t = $("#o-text", side); if (t) { t.focus(); t.select(); }
@@ -675,7 +693,8 @@
         input: it.path, preset: st.preset, transition: { kind: st.trans.kind === "none" ? "" : st.trans.kind, dur: st.trans.dur },
         clips: st.clips.map((c) => ({ start: r2(c.start), end: r2(c.end), speed: c.speed })),
         overlays: st.ov.filter((o) => o.kind !== "sound").map((o) => ({ kind: o.kind, start: Math.max(0, shift(o.start)), end: Math.max(0.2, shift(o.end)), x: o.x, y: o.y, w: o.w || 0, h: o.h || 0, text: o.text || "", size: o.size || 0, color: o.color || "", level: o.level || 2, bg: o.bg !== false, shape: o.shape || "", fill: o.fill || 0, thick: o.thick || 0, flipx: !!o.flipx, flipy: !!o.flipy, style: o.style || "", color2: o.color2 || "", mode: o.mode || "", path: o.path || "", opacity: o.opacity || 0, anim: o.anim && o.anim !== "none" ? o.anim : "" })),
-        sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.end)), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat })),
+        sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.end)), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat, music: !!o.music })),
+        denoise: st.dn, duck: st.duck, fade_in: st.fi, fade_out: st.fo,
         intro: st.intro ? { text: st.intro.text, sub: st.intro.sub, dur: st.intro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
         outro: st.outro ? { text: st.outro.text, sub: st.outro.sub, dur: st.outro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
       };
