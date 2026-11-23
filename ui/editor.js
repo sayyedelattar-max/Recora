@@ -63,11 +63,28 @@
 
     // ---------------------------------------------------------------- playback
     let cur = 0, raf = 0;
+    // sounds that are files (your voice, your music) are heard in the preview at the place you put them
+    const aud = new Map();
+    function syncSounds() {
+      const on = st.playing && !st.rec; let duck = false;
+      for (const o of st.ov) {
+        if (o.kind !== "sound" || o.snd !== "file" || !o.path) continue;
+        let a = aud.get(o.id); const inside = on && st.t >= o.start && st.t < o.end;
+        if (inside) {
+          if (!a) { a = new Audio(fileUrl(o.path)); aud.set(o.id, a); }
+          a.volume = Math.min(1, o.vol || 1); const want = st.t - o.start;
+          if (!(a.duration && want > a.duration) && (a.paused && !a.ended || Math.abs(a.currentTime - want) > 0.4)) { try { a.currentTime = want; } catch (e) {} a.play().catch(() => {}); }
+          if (o.voice) duck = true;
+        } else if (a && !a.paused) a.pause();
+      }
+      for (const [id, a] of aud) if (!st.ov.some((o) => o.id === id)) { a.pause(); aud.delete(id); }
+      if (!st.rec) vid.volume = duck ? 0.25 : 1;
+    }
     function seek(t) {
       st.t = clamp(t, 0, total());
       cur = where(st.t); const c = st.clips[cur], s = starts()[cur];
       vid.currentTime = c.start + (st.t - s) * c.speed; vid.playbackRate = c.speed;
-      paint();
+      syncSounds(); paint();
     }
     function tick() {
       if (!st.playing) return;
@@ -78,12 +95,13 @@
       }
       const c2 = st.clips[cur];
       st.t = starts()[cur] + Math.max(0, vid.currentTime - c2.start) / c2.speed;
-      paint(); raf = requestAnimationFrame(tick);
+      syncSounds(); paint(); raf = requestAnimationFrame(tick);
     }
     function setPlay(on) {
       st.playing = on; $("#b-play", el).innerHTML = on ? I("pause") + "Pause" : I("play") + "Play";
       cancelAnimationFrame(raf);
       if (on) { if (st.t >= total() - 0.05) seek(0); vid.playbackRate = st.clips[cur].speed; vid.play().catch(() => {}); raf = requestAnimationFrame(tick); } else vid.pause();
+      syncSounds();
     }
 
     // ---------------------------------------------------------------- stage overlays
@@ -741,7 +759,7 @@
         input: it.path, preset: st.preset, transition: { kind: st.trans.kind === "none" ? "" : st.trans.kind, dur: st.trans.dur },
         clips: st.clips.map((c) => ({ start: r2(c.start), end: r2(c.end), speed: c.speed })),
         overlays: st.ov.filter((o) => o.kind !== "sound").map((o) => ({ kind: o.kind, start: Math.max(0, shift(o.start)), end: Math.max(0.2, shift(o.end)), x: o.x, y: o.y, w: o.w || 0, h: o.h || 0, text: o.text || "", size: o.size || 0, color: o.color || "", level: o.level || 2, bg: o.bg !== false, shape: o.shape || "", fill: o.fill || 0, thick: o.thick || 0, flipx: !!o.flipx, flipy: !!o.flipy, style: o.style || "", color2: o.color2 || "", mode: o.mode || "", path: o.path || "", opacity: o.opacity || 0, anim: o.anim && o.anim !== "none" ? o.anim : "" })),
-        sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.end)), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat, music: !!o.music, voice: !!o.voice })),
+        sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.start)) + Math.max(0, o.end - o.start), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat, music: !!o.music, voice: !!o.voice })),
         denoise: st.dn, duck: st.duck, fade_in: st.fi, fade_out: st.fo,
         intro: st.intro ? { text: st.intro.text, sub: st.intro.sub, dur: st.intro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
         outro: st.outro ? { text: st.outro.text, sub: st.outro.sub, dur: st.outro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
