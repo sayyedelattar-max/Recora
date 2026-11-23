@@ -4,6 +4,7 @@
   Object.assign(ICONS, {
     text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>',
     box: '<rect x="4" y="6" width="16" height="12" rx="2.5"/>',
+    mic: '<rect x="9" y="4" width="6" height="10" rx="3"/><path d="M6 11a6 6 0 0012 0M12 17v3"/>',
     zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4M11 8.5v5M8.5 11h5"/>',
     image: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.4"/><path d="M5 17l4.5-4.5 3 3 2.5-2.5L20 17"/>',
     sound: '<path d="M4 10v4h3l4 3.5v-11L7 10H4zM15 9.5a3.5 3.5 0 010 5M17.5 7a7 7 0 010 10"/>',
@@ -31,7 +32,7 @@
   window.openEditor = function (it, onDone, opts = {}) {
     closeEditor();
     const dur = it.duration || 1;
-    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", ar: 16 / 9, busy: false };
+    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", wave: null, q: null, prev: null, lv: 2, rec: null, ar: 16 / 9, busy: false };
     const hist = [];
     const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro, a: [st.dn, st.duck, st.fi, st.fo] });
     const push = () => { hist.push(snap()); if (hist.length > 60) hist.shift(); };
@@ -44,7 +45,7 @@
 
     const el = document.createElement("div");
     el.className = "ed"; el.id = "editor";
-    el.innerHTML = `<div class="ed-mb" id="mb">${["File", "Edit", "Clip", "Add", "Tools", "View", "Help"].map((n) => `<button data-m="${n}">${n}</button>`).join("")}</div><div class="ed-top"><button class="btn sm" id="ed-x">${I("x")}Close</button><div class="ed-title" id="ed-title"></div><span class="grow"></span><div class="seg fit" id="ed-pre">${PRESETS.map(([k, n]) => `<button data-k="${k}">${n}</button>`).join("")}</div><button class="btn primary" id="ed-go">Export</button></div>
+    el.innerHTML = `<div class="ed-mb" id="mb">${["File", "Edit", "Clip", "Add", "Tools", "View", "Help"].map((n) => `<button data-m="${n}">${n}</button>`).join("")}<span class="grow" data-tauri-drag-region></span><div class="winbtns"><button data-w="min" title="Minimize">${I("min")}</button><button data-w="max" title="Maximize">${I("max")}</button><button data-w="close" class="close" title="Close">${I("x")}</button></div></div><div class="ed-top"><button class="btn sm" id="ed-x">${I("x")}Close</button><div class="ed-title" id="ed-title"></div><span class="grow"></span><div class="seg fit" id="ed-pre">${PRESETS.map(([k, n]) => `<button data-k="${k}">${n}</button>`).join("")}</div><button class="btn primary" id="ed-go">Export</button></div>
       <div class="ed-main">
         <div class="ed-stage"><div class="ed-frame" id="frame"><video id="ev" src="${fileUrl(it.path)}" preload="auto" playsinline></video><div class="ed-spl" id="spl"></div><div class="ed-ovl" id="ovl"></div></div></div>
         <aside class="ed-side" id="side"></aside>
@@ -56,6 +57,8 @@
     document.body.appendChild(el);
     const vid = $("#ev", el);
     const tlEl = $("#tl", el), side = $("#side", el), ovl = $("#ovl", el), frame = $("#frame", el);
+    invoke("edit_analyze_quick", { path: it.path }).then((a) => { st.q = a; drawTl(); }).catch(() => {});
+    invoke("edit_wave", { path: it.path }).then((p) => { st.wave = p ? fileUrl(p) : ""; drawTl(); }).catch(() => {});
     invoke("edit_strip", { path: it.path, n: 24 }).then((p) => { if (p) { st.strip = fileUrl(p); draw(); } }).catch(() => {});
 
     // ---------------------------------------------------------------- playback
@@ -236,7 +239,10 @@
     }
 
     // ---------------------------------------------------------------- timeline
-    const pps = () => Math.max(20, ((tlEl.clientWidth - 24) / Math.max(total(), 1)) * st.zoom);
+    const LAB = 78;
+    // the start and end of every silence: natural places to cut
+    const pauseEdges = () => (st.q && st.q.voice ? st.q.silences.flat() : []);
+    const pps = () => Math.max(20, ((tlEl.clientWidth - LAB - 14) / Math.max(total(), 1)) * st.zoom);
     function drawTl() {
       const k = pps(), T = total(), W = T * k, S = starts();
       let ticks = ""; const step = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600].find((x) => x * k >= 70) || 600;
@@ -247,28 +253,39 @@
         const mk = it.markers.filter((m) => m >= c.start && m <= c.end).map((m) => `<i class="mkr" style="left:${((m - c.start) / c.speed) * k}px"></i>`).join("");
         return `<div class="cl${i === st.sel ? " sel" : ""}" data-i="${i}" style="left:${S[i] * k}px;width:${w}px;${bg}"><i class="eh l"></i><i class="eh r"></i>${c.speed !== 1 ? `<b class="sp">${c.speed}×</b>` : ""}${mk}</div>`;
       }).join("");
-      const joins = st.trans.kind !== "none" ? S.slice(1).map((s) => `<i class="jn" style="left:${s * k}px" title="${st.trans.kind}"></i>`).join("") : "";
       // each bar takes the first lane where it does not overlap another
-      const laneEnd = [], lane = new Map();
-      st.ov.slice().sort((a, b) => a.start - b.start).forEach((o) => { let l = laneEnd.findIndex((x) => x <= o.start + 0.001); if (l < 0) l = laneEnd.length; laneEnd[l] = o.end; lane.set(o.id, l); });
-      const lanes = Math.max(1, laneEnd.length);
-      const bars = st.ov.map((o) => `<div class="ob ${o.kind}${o.id === st.selOv ? " sel" : ""}" data-id="${o.id}" style="left:${o.start * k}px;width:${Math.max(8, (o.end - o.start) * k)}px;top:${lane.get(o.id) * 22}px"><i class="eh l"></i><span>${o.kind === "text" ? esc(o.text || "Text") : o.kind === "box" ? (BOX_SHAPES.find(([v]) => v === (o.shape || "rect")) || [0, "Highlight"])[1] : o.kind === "image" ? esc(o.name || "Picture") : o.kind === "sound" ? esc(o.name || "Sound") : o.kind === "zoom" ? "Zoom" : "Blur"}</span><i class="eh r"></i></div>`).join("");
-      tlEl.innerHTML = `<div class="tl-in" style="width:${W + 24}px"><div class="tl-ruler" id="ruler">${ticks}</div><div class="tl-clips" id="tcl">${clips}${joins}</div><div class="tl-ovs" id="tov" style="height:${lanes * 22 + 6}px">${bars || `<em>Add text, a highlight or a blur from the side panel</em>`}</div><i class="ph2" id="ph2"></i></div>`;
+      const pack = (list) => { const laneEnd = [], lane = new Map(); list.slice().sort((a, b) => a.start - b.start).forEach((o) => { let l = laneEnd.findIndex((x) => x <= o.start + 0.001); if (l < 0) l = laneEnd.length; laneEnd[l] = o.end; lane.set(o.id, l); }); return { lane, n: laneEnd.length }; };
+      const label = (o) => o.kind === "text" ? esc(o.text || "Text") : o.kind === "box" ? (BOX_SHAPES.find(([v]) => v === (o.shape || "rect")) || [0, "Highlight"])[1] : o.kind === "image" ? esc(o.name || "Picture") : o.kind === "sound" ? esc(o.name || "Sound") : o.kind === "zoom" ? "Zoom" : "Blur";
+      const bar = (o, top, lane) => `<div class="ob ${o.kind}${o.id === st.selOv ? " sel" : ""}" data-id="${o.id}" style="left:${o.start * k}px;width:${Math.max(8, (o.end - o.start) * k)}px;top:${top + lane * 22}px"><i class="eh l"></i><span>${label(o)}</span><i class="eh r"></i></div>`;
+      const fx = st.ov.filter((o) => o.kind !== "sound"), snd = st.ov.filter((o) => o.kind === "sound"), pf = pack(fx), ps = pack(snd);
+      const waves = st.clips.map((c, i) => { const w = len(c) * k, full = (dur / (c.end - c.start)) * w; const bg = st.wave ? `background-image:url('${st.wave}');background-size:${full}px 100%;background-position:${-(c.start / (c.end - c.start)) * w}px 0;` : ""; return `<div class="wv${st.wave === "" ? " none" : ""}" style="left:${S[i] * k}px;width:${w}px;${bg}">${st.wave === "" && i === 0 ? "No sound in this recording" : ""}</div>`; }).join("");
+      const jn = st.clips.length > 1 ? S.slice(1).map((s, i) => `<button class="tj${st.trans.kind !== "none" ? " on" : ""}" data-j="${i}" style="left:${s * k}px" title="Choose how the pieces join">${st.trans.kind !== "none" ? (TRANS.find(([v]) => v === st.trans.kind) || [0, st.trans.kind])[1] : "+"}</button>`).join("") : `<em>Split the video to join its pieces with a transition</em>`;
+      // what the analysis found, drawn on the tracks so the filler is visible at a glance
+      const bandsOf = (ranges, cls, attr) => (ranges || []).flatMap(([a, b]) => st.clips.map((c, i) => { const lo = Math.max(a, c.start), hi = Math.min(b, c.end); if (hi - lo < 0.05) return ""; return `<i class="band ${cls}" ${attr} data-a="${a}" data-b="${b}" data-lo="${lo}" data-hi="${hi}" style="left:${(S[i] + (lo - c.start) / c.speed) * k}px;width:${Math.max(3, ((hi - lo) / c.speed) * k)}px"></i>`; })).join("");
+      const q = st.q, pv = st.prev;
+      const vBands = (q ? bandsOf(q.idle.filter(([a, b]) => b - a >= 2), "idle", 'title="Still screen: click for options"') : "") + (pv ? bandsOf(pv.cuts, "pcut", 'title="Will be removed"') + bandsOf(pv.fast, "pfast", 'title="Will be sped up"') : "");
+      const aBands = q && q.voice ? bandsOf(q.silences, "sil", 'title="Silence: click for options"') : "";
+      const row = (name, id, h, body) => `<div class="tr"><div class="lab">${name}</div><div class="bd" id="${id}" style="height:${h}px">${body}</div></div>`;
+      tlEl.innerHTML = `<div class="tl-in" style="width:${W + LAB + 14}px"><div class="tr"><div class="lab"></div><div class="tl-ruler bd" id="ruler">${ticks}</div></div>
+        ${row("Video", "tcl", 76, clips + vBands)}${row("Transitions", "ttr", 26, jn)}${row("Audio", "taud", 36 + (ps.n ? ps.n * 22 + 4 : 0), waves + aBands + snd.map((o) => bar(o, 38, ps.lane.get(o.id))).join(""))}${row("Effects", "tov", Math.max(1, pf.n) * 22 + 6, fx.map((o) => bar(o, 0, pf.lane.get(o.id))).join("") || `<em>Add text, a highlight, a blur or a picture from the side panel</em>`)}<i class="ph2" id="ph2"></i></div>`;
       tlEl.querySelector(".tl-in").style.setProperty("--k", k);
       wireTl(k); paintHead();
     }
-    function paintHead() { const k = pps(); const p = $("#ph2", el); if (p) p.style.left = st.t * k + "px"; }
+    function paintHead() { const k = pps(); const p = $("#ph2", el); if (p) p.style.left = LAB + st.t * k + "px"; }
     function timeAt(ev) { const r = $("#ruler", el).getBoundingClientRect(); return clamp((ev.clientX - r.left) / pps(), 0, total()); }
     function wireTl() {
       const scrub = (ev) => { setPlay(false); seek(timeAt(ev)); };
       const drag = (fn) => (e) => { e.preventDefault(); const mv = (ev) => fn(ev); const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); }; window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up); };
       $("#ruler", el).onpointerdown = (e) => { scrub(e); drag(scrub)(e); };
+      $$(".wv", el).forEach((n) => (n.onpointerdown = (e) => { st.sel = -1; st.selOv = null; scrub(e); drag(scrub)(e); }));
+      $$(".band.idle, .band.sil", el).forEach((b) => { b.onpointerdown = (ev) => ev.stopPropagation(); b.onclick = (ev) => { ev.stopPropagation(); const a = +b.dataset.a, z = +b.dataset.b, sil = b.classList.contains("sil"); showMenu(ev.clientX, ev.clientY, [{ head: sil ? "This silence" : "This still moment" }, { label: "Remove it", fn: () => { push(); cutRanges([[a, z]]); st.sel = 0; draw(); } }, { label: "Speed it up 4×", fn: () => { push(); speedRanges([[a, z]], 4); draw(); } }]); }; });
+      $$(".tj", el).forEach((b) => (b.onclick = (ev) => { ev.stopPropagation(); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom + 4, TRANS.map(([v, n]) => ({ label: n + (st.trans.kind === v ? "  ✓" : ""), fn: () => { push(); st.trans.kind = v; drawTl(); drawSide(); } }))); }));
       $$(".cl", el).forEach((n) => {
         const i = +n.dataset.i;
         n.onpointerdown = (e) => {
           if (e.target.classList.contains("eh")) {
             e.stopPropagation(); push(); const c = st.clips[i], left = e.target.classList.contains("l"), x0 = e.clientX, s0 = c.start, e0 = c.end, k = pps();
-            const srcT = (() => { const w = where(st.t); return st.clips[w].start + (st.t - starts()[w]) * st.clips[w].speed; })(); drag((ev) => { const d = ((ev.clientX - x0) / k) * c.speed, tol = (8 / k) * c.speed, sn = (v) => (!ev.altKey && srcT != null && Math.abs(v - srcT) < tol ? srcT : v); if (left) c.start = clamp(sn(s0 + d), 0, c.end - 0.2); else c.end = clamp(sn(e0 + d), c.start + 0.2, dur); st.sel = i; seek(Math.min(st.t, total())); drawTl(); })(e); return;
+            const srcT = (() => { const w = where(st.t); return st.clips[w].start + (st.t - starts()[w]) * st.clips[w].speed; })(); drag((ev) => { const d = ((ev.clientX - x0) / k) * c.speed, tol = (8 / k) * c.speed, sn = (v) => { if (ev.altKey) return v; if (srcT != null && Math.abs(v - srcT) < tol) return srcT; const p = pauseEdges().find((x) => Math.abs(x - v) < tol); return p != null ? p : v; }; if (left) c.start = clamp(sn(s0 + d), 0, c.end - 0.2); else c.end = clamp(sn(e0 + d), c.start + 0.2, dur); st.sel = i; seek(Math.min(st.t, total())); drawTl(); })(e); return;
           }
           st.sel = i; st.selOv = null; setPlay(false); seek(timeAt(e)); drawSide(); drawTl(); drag(scrub)(e);
         };
@@ -382,7 +399,8 @@
       seek(Math.min(st.t, total())); draw(); toast(`${mode === "cut" ? "Removed" : "Kept"} ${rs.length} ${rs.length === 1 ? "range" : "ranges"}, now ${fmt(total())} (was ${fmt(before)})`);
     }
     // one careful plan for the whole recording: dead air goes, still moments speed up, never more than half is taken
-    const planFor = async () => { if (!st.an) st.an = await invoke("edit_analyze", { path: it.path }); return invoke("edit_plan", { analysis: st.an, dur }); };
+    const quick = async () => (st.q || (st.q = await invoke("edit_analyze_quick", { path: it.path })));
+    const planFor = async () => invoke("edit_plan", { analysis: await quick(), dur, level: st.lv });
     const quietMsg = (A) => (!A.voice ? "No clear voice in this recording, so pauses can't be told from speech. Nothing was removed" : A.silences.reduce((s, [a, b]) => s + b - a, 0) > dur * 0.6 ? "Most of this recording is quiet, so removing silences would remove too much" : "");
     function applyPlan(pl) { if (pl.fast.length) speedRanges(pl.fast, pl.speed); if (pl.cuts.length) cutRanges(pl.cuts); }
     async function cleanup(btn) {
@@ -510,7 +528,7 @@
       const o = st.ov.find((x) => x.id === st.selOv), c = st.clips[st.sel];
       const swatches = (cur) => COLORS.map((x) => `<button class="sw${x === cur ? " on" : ""}" data-c="${x}" style="background:${x}"></button>`).join("");
       side.innerHTML = `
-        <button class="sm-b" id="quick" style="background:var(--accent);margin-bottom:2px"><b style="color:#fff">Quick clean-up</b><span style="color:rgba(255,255,255,.85)">One tap: removes silences and speeds up still moments</span></button>
+        <button class="sm-b" id="quick" style="background:var(--accent);margin-bottom:2px"><b style="color:#fff">Quick clean-up</b><span style="color:rgba(255,255,255,.85)">One tap: removes silences and speeds up still moments</span></button><div class="row2 lvrow"><span>How much</span><div class="seg fit">${[[1, "Careful"], [2, "Balanced"], [3, "Thorough"]].map(([v, n]) => `<button data-lv="${v}" class="${st.lv === v ? "on" : ""}">${n}</button>`).join("")}</div></div><p class="ai-note" id="qinfo" style="margin:0">Point at the button to see what it would change, on the timeline.</p>
         <button class="sm-b" id="rcps"><b>Recipes</b><span>Ready-made edits you can adjust: tutorial, social short, marked moments…</span></button>
         <div class="label sm">Ask the AI</div>
         <div class="card">${S_AI() ? `<textarea id="ai-q" dir="auto" rows="2" placeholder="For example: remove the first 10 seconds and speed up the slow parts"></textarea><div class="row2"><span class="ai-note" id="ai-est"></span><button class="btn primary sm" id="ai-go">Suggest edits</button></div><div id="ai-out"></div>` : `<p class="muted" style="margin:0">Optional. Add your own API key in Settings and describe the edit in a sentence. Nothing is sent until you press the button.</p><div class="row2"><button class="btn sm" id="ai-set">Set it up</button></div>`}</div>
@@ -519,7 +537,7 @@
         <div class="label sm">Smart tools</div>
         <div class="smart"><button class="sm-b" data-smart="silence"><b>Remove silences</b><span>Cuts every pause longer than a moment</span></button><button class="sm-b" data-smart="idle"><b>Speed up still screen</b><span>Fast-forwards while nothing changes</span></button><button class="sm-b" data-smart="scenes"><b>Find scenes</b><span>Splits where the picture changes</span></button></div>
         <div class="label sm">Add to the video</div>
-        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="zoom">${I("zoom")}Zoom</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>
+        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="zoom">${I("zoom")}Zoom</button><button class="btn" data-add="voice">${I("mic")}Voice</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>
         ${cardsCard()}${audioCard()}
         ${o ? ovCard(o) : ""}
         ${c ? `<div class="label sm">Selected piece</div><div class="card"><div class="row2"><span>Speed</span><div class="seg fit" id="sp">${SPEEDS.map((s) => `<button data-s="${s}" class="${c.speed === s ? "on" : ""}">${s}×</button>`).join("")}</div></div><div class="row2"><span>Length</span><span class="muted">${fmt(len(c))}</span></div></div>` : ""}
@@ -527,12 +545,16 @@
         <div class="card"><div class="tgrid" id="tr">${TRANS.map(([k, n]) => `<button data-k="${k}" class="${st.trans.kind === k ? "on" : ""}">${n}</button>`).join("")}</div>
           ${st.trans.kind !== "none" ? `<div class="row2"><span>Length</span><input type="range" id="tr-d" min="0.2" max="1.5" step="0.1" value="${st.trans.dur}"><span class="muted">${st.trans.dur}s</span></div>${st.clips.length < 2 ? `<p class="muted">Split the video to see it work.</p>` : ""}` : ""}</div>`;
       $("#rcps", side).onclick = () => openRecipes();
-      $("#quick", side).onclick = (ev) => cleanup(ev.currentTarget);
+      const qb = $("#quick", side);
+      const preview = async () => { try { const pl = await planFor(); st.prev = pl; drawTl(); const i = $("#qinfo", side); if (i) i.textContent = !pl.cuts.length && !pl.fast.length ? (pl.voice ? "Nothing to tidy here." : "No clear voice in this recording, so only still moments would be sped up.") : `Would remove ${pl.cuts.length} dead ${pl.cuts.length === 1 ? "part" : "parts"} and speed up ${pl.fast.length} still ${pl.fast.length === 1 ? "moment" : "moments"}. About ${fmt(pl.saved)} shorter.`; } catch (err) {} };
+      qb.onmouseenter = preview; qb.onmouseleave = () => { st.prev = null; drawTl(); };
+      $$("[data-lv]", side).forEach((b) => (b.onclick = () => { st.lv = +b.dataset.lv; $$("[data-lv]", side).forEach((x) => x.classList.toggle("on", x === b)); preview(); }));
+      qb.onclick = (ev) => { st.prev = null; cleanup(ev.currentTarget); };
       const cd = $("#cut-del", side); if (cd) { cd.onclick = () => byTime("cut", $("#cut-t", side).value); $("#cut-keep", side).onclick = () => byTime("keep", $("#cut-t", side).value); const ct = $("#cut-t", side); ct.onkeydown = (ev) => ev.stopPropagation(); ct.value = st.cutText || ""; ct.oninput = () => (st.cutText = ct.value); }
       const ag = $("#ai-go", side); if (ag) { const q = $("#ai-q", side); q.onkeydown = (ev) => ev.stopPropagation(); q.value = st.aiText || ""; ag.onclick = () => askAi(ag); const est = () => { st.aiText = q.value; if (!q.value.trim()) { $("#ai-est", side).textContent = ""; return; } facts().then((f) => invoke("ai_estimate", { instruction: q.value, facts: f })).then((n) => { $("#ai-est", side).textContent = `About ${n} tokens`; }).catch(() => {}); }; let tm; q.oninput = () => { clearTimeout(tm); tm = setTimeout(est, 600); }; }
       const as = $("#ai-set", side); if (as) as.onclick = () => { closeEditor(); window.__goSettings && window.__goSettings(); };
       $$("[data-smart]", side).forEach((b) => (b.onclick = () => smart(b.dataset.smart, b)));
-      $$("[data-add]", side).forEach((b) => (b.onclick = () => (b.dataset.add === "sound" ? soundMenu(b) : addOverlay(b.dataset.add))));
+      $$("[data-add]", side).forEach((b) => (b.onclick = () => (b.dataset.add === "sound" ? soundMenu(b) : b.dataset.add === "voice" ? recordVoice() : addOverlay(b.dataset.add))));
       if (o) wireOv(o);
       wireCards();
       $$("#sp button", side).forEach((b) => (b.onclick = () => { push(); c.speed = +b.dataset.s; seek(Math.min(st.t, total())); draw(); }));
@@ -574,10 +596,10 @@
       } else {
         body = `<div class="row2"><span>Volume</span><input type="range" id="o-vol" min="0.1" max="2" step="0.05" value="${o.vol || 1}"><span class="muted" id="o-vv">${Math.round((o.vol || 1) * 100)}%</span></div>
           <div class="row2"><span>Fade</span>${sg("fade", [[0, "None"], [0.5, "Short"], [1, "Medium"], [2, "Long"]], o.fade || 0)}</div>
-          ${o.snd === "file" || o.music ? `<div class="row2"><span>Repeat</span>${sg("repeat", [[false, "Off"], [true, "To fill the time"]], !!o.repeat)}</div>` : ""}
+          ${(o.snd === "file" || o.music) && !o.voice ? `<div class="row2"><span>Repeat</span>${sg("repeat", [[false, "Off"], [true, "To fill the time"]], !!o.repeat)}</div>` : ""}
           ${o.snd === "file" ? `<div class="row2"><button class="btn sm" id="o-play">Preview</button></div>` : ""}`;
       }
-      return `<div class="label sm">${KIND_NAME[o.kind]}${o.kind === "sound" ? ": " + esc(o.name || "") : ""}</div><div class="card">${body}${tm}${foot}<p class="ai-note" style="margin:0">${o.kind === "sound" ? "Drag the bar in the timeline to move it. Sounds are mixed into the exported video." : "Drag on the picture, pull a handle to resize. Arrow keys nudge it, Alt turns snapping off."}</p></div>`;
+      return `<div class="label sm">${KIND_NAME[o.kind]}${o.kind === "sound" ? ": " + esc(o.name || "") : ""}</div><div class="card">${body}${tm}${foot}<p class="ai-note" style="margin:0">${o.kind === "sound" ? (o.voice ? "Drag the bar to move your voice. The recording's own sound is lowered while it plays." : "Drag the bar in the timeline to move it. Sounds are mixed into the exported video.") : "Drag on the picture, pull a handle to resize. Arrow keys nudge it, Alt turns snapping off."}</p></div>`;
     }
     function wireOv(o) {
       const rebuild = () => { const n = ovNode(o.id); if (n) n.remove(); drawSide(); drawTl(); paintOverlays(); };
@@ -615,7 +637,7 @@
       const row = (key, label, def) => { const c = st[key]; return `<div class="row2"><span>${label}</span><button class="switch${c ? " on" : ""}" data-card="${key}" role="switch" aria-checked="${!!c}"></button></div>${c ? `<input class="txt wide" data-ct="${key}|text" dir="auto" placeholder="Title" value="${esc(c.text)}"><input class="txt wide" data-ct="${key}|sub" dir="auto" placeholder="Smaller line (optional)" value="${esc(c.sub)}">` : ""}`; };
       return `<div class="label sm">Title cards</div><div class="card">${row("intro", "Opening")}${row("outro", "Closing")}${st.intro || st.outro ? `<div class="row2"><span>Background</span><div class="sws">${SW(CARD_BG, st.cardc.bg, "data-cbg")}</div></div><div class="row2"><span>Accent</span><div class="sws">${SW(CARD_AC, st.cardc.accent, "data-cac")}</div></div><p class="ai-note" style="margin:0">Added at export, about 3 seconds each. Nothing in the picture above changes.</p>` : `<p class="ai-note" style="margin:0">A plain card with your words before or after the video.</p>`}</div>`;
     }
-    const FADES = [[0, "None"], [0.5, "Short"], [1, "Medium"], [2, "Long"]];
+    const FADES = [[0, "None"], [0.5, "0.5 s"], [1, "1 s"], [2, "2 s"]];
     const fseg = (k, cur) => `<div class="seg fit">${FADES.map(([v, n]) => `<button data-fd="${k}" data-v="${v}" class="${cur === v ? "on" : ""}">${n}</button>`).join("")}</div>`;
     function audioCard() {
       const hasMusic = st.ov.some((o) => o.kind === "sound" && o.music);
@@ -647,6 +669,32 @@
       const base = { id: uid++, kind: "sound", snd: spec.snd, fx: spec.fx || "", path, name: spec.name, music, repeat: fill, start: r2(s), end: r2(fill ? T : Math.min(T, s + len)), x: 0, y: 0, w: 0, h: 0, vol: music ? 0.3 : 1, fade: music ? 1 : 0 };
       if (base.end - base.start < 0.2) base.end = r2(Math.min(T, base.start + 0.2));
       st.ov.push(base); st.selOv = base.id; st.sel = -1; draw();
+    }
+    // voice-over: records the microphone while the video plays, over the selected clip or from the playhead
+    async function recordVoice() {
+      if (st.rec) { stopVoice(); return; }
+      const clip = st.sel >= 0 ? st.clips[st.sel] : null, S = starts();
+      let from = clamp(st.t, 0, total() - 0.2), to = total();
+      if (clip) { const a = S[st.sel], b = a + len(clip); to = b; if (from < a || from >= b - 0.2) from = a; }
+      try { await invoke("voice_start"); } catch (err) { toast(err, true); return; }
+      seek(from); vid.muted = true; setPlay(true);
+      const bar = document.createElement("div"); bar.className = "vobar"; bar.innerHTML = `<i class="rd"></i><b>Recording your voice</b><span id="vo-t">0:00</span><div class="vm"><i id="vo-m"></i></div><button class="btn sm" id="vo-s">Stop</button>`; el.appendChild(bar);
+      const t0 = performance.now();
+      st.rec = { from, to, t0, bar, timer: setInterval(async () => {
+        $("#vo-t", bar).textContent = fmt((performance.now() - t0) / 1000);
+        try { const lv = await invoke("voice_level"); $("#vo-m", bar).style.width = Math.min(100, Math.sqrt(lv) * 140) + "%"; } catch (err) {}
+        if (st.t >= to - 0.05) stopVoice();
+      }, 120) };
+      $("#vo-s", bar).onclick = stopVoice;
+    }
+    async function stopVoice() {
+      const r = st.rec; if (!r) return; st.rec = null; clearInterval(r.timer); r.bar.remove(); setPlay(false); vid.muted = false;
+      const secs = Math.min((performance.now() - r.t0) / 1000, r.to - r.from);
+      try {
+        const path = await invoke("voice_stop"); if (secs < 0.5) { toast("That was too short to keep"); return; }
+        push(); const o = { id: uid++, kind: "sound", snd: "file", path, name: "Voice", voice: true, music: false, repeat: false, start: r2(r.from), end: r2(r.from + secs), x: 0, y: 0, w: 0, h: 0, vol: 1, fade: 0 };
+        st.ov.push(o); st.selOv = o.id; st.sel = -1; draw(); toast("Voice added. The recording's own sound is lowered while you speak");
+      } catch (err) { toast(err, true); }
     }
     function soundMenu(btn) {
       const r = btn.getBoundingClientRect();
@@ -693,7 +741,7 @@
         input: it.path, preset: st.preset, transition: { kind: st.trans.kind === "none" ? "" : st.trans.kind, dur: st.trans.dur },
         clips: st.clips.map((c) => ({ start: r2(c.start), end: r2(c.end), speed: c.speed })),
         overlays: st.ov.filter((o) => o.kind !== "sound").map((o) => ({ kind: o.kind, start: Math.max(0, shift(o.start)), end: Math.max(0.2, shift(o.end)), x: o.x, y: o.y, w: o.w || 0, h: o.h || 0, text: o.text || "", size: o.size || 0, color: o.color || "", level: o.level || 2, bg: o.bg !== false, shape: o.shape || "", fill: o.fill || 0, thick: o.thick || 0, flipx: !!o.flipx, flipy: !!o.flipy, style: o.style || "", color2: o.color2 || "", mode: o.mode || "", path: o.path || "", opacity: o.opacity || 0, anim: o.anim && o.anim !== "none" ? o.anim : "" })),
-        sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.end)), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat, music: !!o.music })),
+        sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.end)), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat, music: !!o.music, voice: !!o.voice })),
         denoise: st.dn, duck: st.duck, fade_in: st.fi, fade_out: st.fo,
         intro: st.intro ? { text: st.intro.text, sub: st.intro.sub, dur: st.intro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
         outro: st.outro ? { text: st.outro.text, sub: st.outro.sub, dur: st.outro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
@@ -783,13 +831,14 @@
       File: [{ label: "Open another video…", fn: () => { closeEditor(); window.__pickVideo && window.__pickVideo(); } }, { label: "Export", key: "", fn: go }, { label: "Export as", sub: PRESETS.map(([k, n]) => ({ label: n, fn: () => { st.preset = k; draw(); go(); } })) }, "-", { label: "Close editor", key: "Esc", fn: closeEditor }],
       Edit: [{ label: "Undo", key: "Ctrl+Z", off: !hist.length, fn: undo }, "-", { label: "Split at the playhead", key: "S", fn: split }, { label: "Delete selected", key: "Del", fn: del }, "-", { label: "Delete everything before the playhead", fn: () => trimHere("before") }, { label: "Delete everything after the playhead", fn: () => trimHere("after") }],
       Clip: [{ label: "Duplicate", off: st.sel < 0, fn: () => dupClip(st.sel) }, { label: "Speed", off: st.sel < 0, sub: st.sel >= 0 ? speedItems(st.clips[st.sel]) : [] }, { label: "Move left", off: st.sel <= 0, fn: () => moveClip(st.sel, -1) }, { label: "Move right", off: st.sel < 0 || st.sel >= st.clips.length - 1, fn: () => moveClip(st.sel, 1) }, "-", { label: "Transition between pieces", sub: TRANS.map(([k, n]) => ({ label: n + (st.trans.kind === k ? "  ✓" : ""), fn: () => { push(); st.trans.kind = k; draw(); } })) }],
-      Add: [{ label: "Text", fn: () => addOverlay("text") }, { label: "Highlight box", fn: () => addOverlay("box") }, { label: "Blur area", fn: () => addOverlay("blur") }],
+      Add: [{ label: "Record voice-over", fn: () => recordVoice() }, "-", { label: "Text", fn: () => addOverlay("text") }, { label: "Highlight box", fn: () => addOverlay("box") }, { label: "Blur area", fn: () => addOverlay("blur") }],
       Tools: [{ label: "Quick clean-up", fn: () => cleanup($("#quick", side)) }, { label: "Recipes…", fn: () => openRecipes() }, "-", { label: "Remove silences", fn: () => smart("silence", $("[data-smart=silence]", side)) }, { label: "Speed up still screen", fn: () => smart("idle", $("[data-smart=idle]", side)) }, { label: "Find scenes", fn: () => smart("scenes", $("[data-smart=scenes]", side)) }, "-", { label: "Cut by time…", fn: CUT_FOCUS }, { label: "Ask the AI…", fn: () => { const q = $("#ai-q", side); if (q) { q.scrollIntoView({ block: "center" }); q.focus(); } else toast("Add your API key in Settings to use this") } }],
       View: [{ label: "Fit the timeline", fn: () => { st.zoom = 1; $("#b-zoom", el).value = 1; drawTl(); } }, { label: "Zoom in", fn: () => { st.zoom = Math.min(8, st.zoom * 1.5); $("#b-zoom", el).value = st.zoom; drawTl(); } }, { label: "Zoom out", fn: () => { st.zoom = Math.max(1, st.zoom / 1.5); $("#b-zoom", el).value = st.zoom; drawTl(); } }],
       Help: [{ label: "Keyboard shortcuts", fn: shortcuts }, { label: "Right-click anywhere for more options", off: true, fn: () => {} }],
     });
-    $$("#mb button", el).forEach((b) => {
-      const open = () => { $$("#mb button", el).forEach((x) => x.classList.toggle("on", x === b)); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom + 2, menuDefs()[b.dataset.m]); };
+    $$("#mb [data-w]", el).forEach((b) => (b.onclick = () => { const w = window.__win; if (w) w[b.dataset.w](); }));
+    $$("#mb button[data-m]", el).forEach((b) => {
+      const open = () => { $$("#mb button[data-m]", el).forEach((x) => x.classList.toggle("on", x === b)); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom + 2, menuDefs()[b.dataset.m]); };
       b.onclick = (ev) => { ev.stopPropagation(); if (b.classList.contains("on") && $(".ctx", el)) { closeMenu(); b.classList.remove("on"); } else open(); };
       b.onmouseenter = () => { if ($(".ctx", el) && $$("#mb button.on", el).length && !b.classList.contains("on")) open(); };
     });

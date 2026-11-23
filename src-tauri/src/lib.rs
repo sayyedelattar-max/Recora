@@ -26,6 +26,7 @@ pub struct AppState {
     settings_path: PathBuf,
     session: Mutex<Option<Session>>,
     phase: Mutex<String>, // idle | countdown | recording | paused | saving
+    voice: Mutex<Option<(recorder::audio::AudioRec, recorder::audio::Levels)>>,
 }
 
 type R<T> = Result<T, String>;
@@ -649,6 +650,47 @@ async fn edit_strip(state: State<'_, AppState>, path: String, n: u32) -> R<Strin
     let work = PathBuf::from(state.settings.lock().out_dir.clone()).join(".recora").join("strips");
     tauri::async_runtime::spawn_blocking(move || edit::strip(Path::new(&path), &work, n.clamp(4, 40)).map(|p| p.to_string_lossy().to_string()).map_err(e2s)).await.map_err(e2s)?
 }
+/// Starts recording the microphone for a voice-over in the editor.
+#[tauri::command]
+fn voice_start(state: State<'_, AppState>) -> R<()> {
+    let mut g = state.voice.lock();
+    if g.is_some() {
+        return Err("Already recording".into());
+    }
+    let s = state.settings.lock().clone();
+    let dir = PathBuf::from(&s.out_dir).join(".recora").join("voice");
+    std::fs::create_dir_all(&dir).map_err(e2s)?;
+    let seg = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as usize).unwrap_or(0);
+    let levels = recorder::audio::Levels::new();
+    let rec = recorder::audio::AudioRec::start(recorder::audio::AudioSpec { mic: true, mic_device: s.mic_device.clone(), system: false }, dir, seg, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), levels.clone());
+    *g = Some((rec, levels));
+    Ok(())
+}
+/// How loud the microphone is right now (0 to 1), so the person can see it is working.
+#[tauri::command]
+fn voice_level(state: State<'_, AppState>) -> f32 {
+    state.voice.lock().as_ref().map(|(_, l)| recorder::audio::Levels::get(&l.mic)).unwrap_or(0.0)
+}
+/// Stops the voice-over and returns the saved file.
+#[tauri::command]
+async fn voice_stop(state: State<'_, AppState>) -> R<String> {
+    let taken = state.voice.lock().take();
+    let Some((rec, _)) = taken else { return Err("Not recording".into()) };
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = rec.stop();
+        match res.mic {
+            Some(w) if w.path.exists() => Ok(w.path.to_string_lossy().to_string()),
+            _ => Err(res.errors.first().cloned().unwrap_or_else(|| "The microphone recorded nothing".into())),
+        }
+    })
+    .await
+    .map_err(e2s)?
+}
+#[tauri::command]
+async fn edit_wave(state: State<'_, AppState>, path: String) -> R<String> {
+    let work = PathBuf::from(state.settings.lock().out_dir.clone()).join(".recora").join("strips");
+    tauri::async_runtime::spawn_blocking(move || edit::wave(Path::new(&path), &work).map(|p| p.map(|x| x.to_string_lossy().to_string()).unwrap_or_default()).map_err(e2s)).await.map_err(e2s)?
+}
 #[tauri::command]
 async fn edit_analyze(path: String) -> R<edit::Analysis> {
     tauri::async_runtime::spawn_blocking(move || edit::analyze(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
@@ -659,8 +701,8 @@ async fn edit_analyze_quick(path: String) -> R<edit::Analysis> {
     tauri::async_runtime::spawn_blocking(move || edit::analyze_quick(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
 }
 #[tauri::command]
-fn edit_plan(analysis: edit::Analysis, dur: f64) -> edit::Plan {
-    edit::plan(&analysis, dur)
+fn edit_plan(analysis: edit::Analysis, dur: f64, level: Option<u8>) -> edit::Plan {
+    edit::plan(&analysis, dur, level.unwrap_or(2))
 }
 #[tauri::command]
 async fn edit_probe(path: String) -> R<library::Item> {
@@ -758,7 +800,7 @@ pub fn run() {
             let path = dir.join("settings.json");
             let s = Settings::load(&path);
             let _ = std::fs::create_dir_all(&s.out_dir);
-            app.manage(AppState { settings: Mutex::new(s), settings_path: path, session: Mutex::new(None), phase: Mutex::new("idle".into()) });
+            app.manage(AppState { settings: Mutex::new(s), settings_path: path, session: Mutex::new(None), phase: Mutex::new("idle".into()), voice: Mutex::new(None) });
             register_hotkeys(app.handle());
             recorder::warm_up();
             let open = MenuItem::with_id(app, "open", "Open Recora", true, None::<&str>)?;
@@ -794,7 +836,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_analyze, edit_analyze_quick, edit_plan, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_wave, voice_start, voice_stop, voice_level, edit_analyze, edit_analyze_quick, edit_plan, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())

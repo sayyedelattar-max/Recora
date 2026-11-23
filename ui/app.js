@@ -27,6 +27,7 @@
   function buildShell() {
     const win = T.window.getCurrentWindow();
     $("#winbtns").innerHTML = `<button id="wmin" title="Minimize">${I("min")}</button><button id="wmax" title="Maximize">${I("max")}</button><button id="wclose" class="close" title="Close">${I("x")}</button>`;
+    window.__win = { min: () => win.minimize(), max: () => win.toggleMaximize(), close: () => (phase === "idle" ? win.close() : win.hide()) };
     $("#wmin").onclick = () => win.minimize();
     $("#wmax").onclick = () => win.toggleMaximize();
     $("#wclose").onclick = () => (phase === "idle" ? win.close() : win.hide());

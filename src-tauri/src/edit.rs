@@ -104,6 +104,9 @@ pub struct Sound {
     /// background music: it is lowered while someone speaks when ducking is on
     #[serde(default)]
     pub music: bool,
+    /// a voice-over: the recording's own sound is lowered while it plays
+    #[serde(default)]
+    pub voice: bool,
 }
 
 /// A title card added before or after the video.
@@ -488,6 +491,7 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
     // sounds: effects and music are mixed under or over the video's own sound
     let mut audio: Option<String> = if has_audio { Some(cur_a.clone()) } else { None };
     let mut music_ins: Vec<String> = vec![];
+    let mut voice_ins: Vec<String> = vec![];
     if !gif && !p.sounds.is_empty() {
         let base = if let Some(a) = &audio { a.clone() } else {
             g.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={},asetpts=PTS-STARTPTS[abase]", f(total_len)));
@@ -517,7 +521,16 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
             let ms = (start * 1000.0).round() as i64;
             ch += &format!(",adelay={ms}|{ms}[sd{k}]");
             g.push(ch);
-            if sn.music && p.duck && has_audio { music_ins.push(format!("[sd{k}]")); } else { ins.push(format!("[sd{k}]")); }
+            if sn.voice && has_audio { voice_ins.push(format!("[sd{k}]")); }
+            else if sn.music && p.duck && has_audio { music_ins.push(format!("[sd{k}]")); } else { ins.push(format!("[sd{k}]")); }
+        }
+        if !voice_ins.is_empty() {
+            // the voice-over lowers the recording's own sound while it speaks, and is heard on top of it
+            if voice_ins.len() > 1 { g.push(format!("{}amix=inputs={}:duration=longest:normalize=0[vmix]", voice_ins.concat(), voice_ins.len())); } else { g.push(format!("{}anull[vmix]", voice_ins[0])); }
+            g.push("[vmix]asplit[vm1][vm2]".to_string());
+            g.push(format!("[{base}][vm2]sidechaincompress=threshold=0.015:ratio=14:attack=15:release=400:makeup=1[basedk]"));
+            ins[0] = "[basedk]".into();
+            ins.push("[vm1]".into());
         }
         if !music_ins.is_empty() {
             // the voice drives the compressor that lowers the music, and is also heard on its own
@@ -621,6 +634,22 @@ pub fn strip(path: &Path, work: &Path, n: u32) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// A picture of the sound's waveform for the timeline. Empty when the video has no sound.
+pub fn wave(path: &Path, work: &Path) -> Result<Option<PathBuf>> {
+    if !ffmpeg::has_audio(path) {
+        return Ok(None);
+    }
+    let key = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let stem: String = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default().chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    let out = work.join(format!("{stem}_{key}_wave.png"));
+    if out.exists() {
+        return Ok(Some(out));
+    }
+    std::fs::create_dir_all(work)?;
+    ffmpeg::run(&["-i".to_string(), path.to_string_lossy().into(), "-filter_complex".into(), "aformat=channel_layouts=mono,showwavespic=s=3000x64:colors=0x8e8e93:scale=sqrt".into(), "-frames:v".into(), "1".into(), out.to_string_lossy().into()])?;
+    Ok(Some(out))
+}
+
 /// What the smart tools found in a video, all in seconds of the source.
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct Analysis {
@@ -657,24 +686,25 @@ fn overlap(a: &[(f64, f64)], b: &[(f64, f64)]) -> Vec<(f64, f64)> {
 
 /// A careful plan: only dead air goes (nothing said AND nothing changing on screen), still moments with no
 /// speech are fast-forwarded, and the total is capped so a quiet recording is never emptied.
-pub fn plan(a: &Analysis, dur: f64) -> Plan {
+pub fn plan(a: &Analysis, dur: f64, level: u8) -> Plan {
+    let (dead_min, idle_min, cap_share) = match level { 1 => (2.5, 4.0, 0.35), 3 => (0.9, 2.0, 0.65), _ => (1.5, 3.0, 0.5) };
     let mut p = Plan { speed: 4.0, voice: a.voice, ..Default::default() };
     if dur < 10.0 {
         return p;
     }
     let idle: Vec<(f64, f64)> = a.idle.iter().filter(|(s, e)| e - s >= 2.0).cloned().collect();
     // dead air: still screen and silent at once
-    let mut cuts: Vec<(f64, f64)> = if a.voice { overlap(&a.silences, &idle).into_iter().filter(|(s, e)| e - s >= 1.5).map(|(s, e)| (if s < 0.3 { 0.0 } else { s + 0.25 }, if e > dur - 0.3 { dur } else { e - 0.25 })).filter(|(s, e)| e - s >= 0.6).collect() } else { vec![] };
+    let mut cuts: Vec<(f64, f64)> = if a.voice { overlap(&a.silences, &idle).into_iter().filter(|(s, e)| e - s >= dead_min).map(|(s, e)| (if s < 0.3 { 0.0 } else { s + 0.25 }, if e > dur - 0.3 { dur } else { e - 0.25 })).filter(|(s, e)| e - s >= 0.6).collect() } else { vec![] };
     // still moments that are not dead air: speed them up, but only when nobody is speaking over them
     let quiet: Vec<(f64, f64)> = if a.voice { a.silences.clone() } else { vec![(0.0, dur)] };
-    let mut fast: Vec<(f64, f64)> = overlap(&idle, &quiet).into_iter().filter(|(s, e)| e - s >= 3.0).map(|(s, e)| (s + 0.5, e - 0.5)).filter(|(s, e)| e - s >= 1.5).collect();
+    let mut fast: Vec<(f64, f64)> = overlap(&idle, &quiet).into_iter().filter(|(s, e)| e - s >= idle_min).map(|(s, e)| (s + 0.5, e - 0.5)).filter(|(s, e)| e - s >= 1.5).collect();
     // keep fast ranges out of the cuts
     fast = fast.into_iter().filter(|(s, e)| !cuts.iter().any(|(a, b)| s < b && e > a)).collect();
     // never take more than half of the recording: keep the biggest wins first
     let gain = |r: &(f64, f64), cut: bool| if cut { r.1 - r.0 } else { (r.1 - r.0) * 0.75 };
     let mut all: Vec<(f64, bool, (f64, f64))> = cuts.iter().map(|r| (gain(r, true), true, *r)).chain(fast.iter().map(|r| (gain(r, false), false, *r))).collect();
     all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-    let (mut saved, cap) = (0.0, dur * 0.5);
+    let (mut saved, cap) = (0.0, dur * cap_share);
     cuts.clear();
     fast.clear();
     for (g, is_cut, r) in all {
@@ -809,7 +839,7 @@ mod tests {
         let p = clip_with(&d, "still.mp4", "color=c=navy:s=320x180:r=15", Some("anullsrc=r=44100:cl=mono"), 40);
         let a = analyze_quick(Path::new(&p)).unwrap();
         assert!(!a.voice, "silent track must not count as voice");
-        let pl = plan(&a, 40.0);
+        let pl = plan(&a, 40.0, 2);
         assert!(pl.cuts.is_empty(), "cuts {:?}", pl.cuts);
         assert!(pl.saved <= 20.0 + 1e-6, "saved {}", pl.saved);
         // very quiet but real speech-like tone: still not treated as silence
@@ -826,7 +856,7 @@ mod tests {
         let p = clip_with(&d, "dead.mp4", "color=c=navy:s=320x180:r=15", Some("aevalsrc=if(lt(t\\,10)+gt(t\\,24)\\,0.5*sin(2*PI*440*t)\\,0):s=44100"), 34);
         let a = analyze_quick(Path::new(&p)).unwrap();
         assert!(a.voice);
-        let pl = plan(&a, 34.0);
+        let pl = plan(&a, 34.0, 2);
         assert_eq!(pl.cuts.len(), 1, "{:?} {:?}", a, pl);
         let (s, e) = pl.cuts[0];
         assert!(s > 9.5 && s < 11.5 && e > 22.5 && e < 24.5, "cut {s}-{e}");
@@ -836,9 +866,11 @@ mod tests {
     #[test]
     fn plan_is_capped() {
         let a = Analysis { silences: vec![(0.0, 100.0)], idle: vec![(0.0, 100.0)], scenes: vec![], voice: true };
-        let pl = plan(&a, 100.0);
+        let pl = plan(&a, 100.0, 2);
         assert!(pl.saved <= 50.0 + 1e-6);
-        assert!(plan(&a, 8.0).cuts.is_empty());
+        assert!(plan(&a, 8.0, 2).cuts.is_empty());
+        assert!(plan(&a, 100.0, 1).saved <= 35.0 + 1e-6);
+        assert!(plan(&a, 100.0, 3).saved <= 65.0 + 1e-6);
     }
 
     #[test]
@@ -903,6 +935,31 @@ mod tests {
         export_to(&p, &out).unwrap();
         assert!(ffmpeg::has_audio(&out));
         assert!(ffmpeg::duration(&out).unwrap() > 1.0);
+    }
+
+    #[test]
+    fn draws_a_waveform_only_when_there_is_sound() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("wave");
+        let a = clip_with(&d, "a.mp4", "testsrc2=size=320x180:rate=15", Some("aevalsrc=0.5*sin(2*PI*440*t):s=44100"), 3);
+        let w = wave(Path::new(&a), &d).unwrap();
+        assert!(w.is_some() && w.unwrap().exists());
+        let m = clip_with(&d, "m.mp4", "testsrc2=size=320x180:rate=15", None, 3);
+        assert!(wave(Path::new(&m), &d).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_voice_over_lowers_the_original_sound() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("vo");
+        let src = sample(&d);
+        let wav = d.join("v.wav");
+        ffmpeg::run(&["-f", "lavfi", "-i", "aevalsrc=0.4*sin(2*PI*220*t):s=44100:d=2", wav.to_str().unwrap()]).unwrap();
+        let mut p = proj(src);
+        p.sounds = vec![Sound { kind: "file".into(), path: wav.to_string_lossy().into(), start: 0.5, voice: true, ..Default::default() }];
+        let out = d.join("vo.mp4");
+        export_to(&p, &out).unwrap();
+        assert!(ffmpeg::has_audio(&out));
     }
 
     #[test]
