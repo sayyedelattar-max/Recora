@@ -2,6 +2,12 @@
 (() => {
   const { icon: I, $, $$, esc, invoke, fileUrl, fmt, toast, ICONS } = R;
   Object.assign(ICONS, {
+    cut: '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17M8 15.5L20 7"/>',
+    add: '<path d="M12 5v14M5 12h14"/>',
+    look: '<rect x="4" y="5" width="16" height="11" rx="2.5"/><path d="M8 20h8"/>',
+    wave: '<path d="M5 10v4M9 7v10M13 4v16M17 8v8M20 10.5v3"/>',
+    spark: '<path d="M12 4l1.8 4.7 4.7 1.8-4.7 1.8L12 17l-1.8-4.7L5.5 10.5l4.7-1.8z"/>',
+    share: '<path d="M12 15V4M8 8l4-4 4 4M5 13v6h14v-6"/>',
     text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>',
     box: '<rect x="4" y="6" width="16" height="12" rx="2.5"/>',
     mic: '<rect x="9" y="4" width="6" height="10" rx="3"/><path d="M6 11a6 6 0 0012 0M12 17v3"/>',
@@ -35,7 +41,7 @@
   window.openEditor = function (it, onDone, opts = {}) {
     closeEditor();
     const dur = it.duration || 1;
-    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, lk: {}, muteOrig: false, cur: [], cfx: { rings: false, halo: false }, fr: { kind: "", color: "#101828", color2: "#f8cdda", path: "", pad: 0.07, radius: 0.02, shadow: true }, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", wave: null, q: null, prev: null, lv: 2, rec: null, ar: 16 / 9, busy: false };
+    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, lk: {}, muteOrig: false, chap: (it.markers || []).slice().sort((a, b) => a - b).map((t, i) => ({ id: uid++, src: t, title: "Part " + (i + 1) })), cur: [], cfx: { rings: false, halo: false }, fr: { kind: "", color: "#101828", color2: "#f8cdda", path: "", pad: 0.07, radius: 0.02, shadow: true }, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", wave: null, q: null, prev: null, lv: 2, rec: null, ar: 16 / 9, busy: false };
     const hist = [];
     const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro, a: [st.dn, st.duck, st.fi, st.fo], f: st.fr, m: st.muteOrig });
     const push = () => { hist.push(snap()); if (hist.length > 60) hist.shift(); };
@@ -553,29 +559,34 @@
     function drawSide() {
       const o = st.ov.find((x) => x.id === st.selOv), c = st.clips[st.sel];
       const swatches = (cur) => COLORS.map((x) => `<button class="sw${x === cur ? " on" : ""}" data-c="${x}" style="background:${x}"></button>`).join("");
-      side.innerHTML = `
-        <button class="sm-b" id="quick" style="background:var(--accent);margin-bottom:2px"><b style="color:#fff">Quick clean-up</b><span style="color:rgba(255,255,255,.85)">One tap: removes silences and speeds up still moments</span></button><div class="row2 lvrow"><span>How much</span><div class="seg fit">${[[1, "Careful"], [2, "Balanced"], [3, "Thorough"]].map(([v, n]) => `<button data-lv="${v}" class="${st.lv === v ? "on" : ""}">${n}</button>`).join("")}</div></div><p class="ai-note" id="qinfo" style="margin:0">Point at the button to see what it would change, on the timeline.</p>
+      const TABS = [["edit", "cut", "Edit"], ["add", "add", "Add"], ["look", "look", "Look"], ["sound", "wave", "Sound"], ["share", "share", "Share"], ["ai", "spark", "AI"]];
+      if (!TABS.some((t) => t[0] === st.tab)) st.tab = "edit";
+      const P = {
+        edit: `<button class="sm-b" id="quick" style="background:var(--accent);margin-bottom:2px"><b style="color:#fff">Quick clean-up</b><span style="color:rgba(255,255,255,.85)">One tap: removes silences and speeds up still moments</span></button><div class="row2 lvrow"><span>How much</span><div class="seg fit">${[[1, "Careful"], [2, "Balanced"], [3, "Thorough"]].map(([v, n]) => `<button data-lv="${v}" class="${st.lv === v ? "on" : ""}">${n}</button>`).join("")}</div></div><p class="ai-note" id="qinfo" style="margin:0">Point at the button to see what it would change, on the timeline.</p>
         <button class="sm-b" id="rcps"><b>Recipes</b><span>Ready-made edits you can adjust: tutorial, social short, marked moments…</span></button>
-        <div class="label sm">Ask the AI</div>
-        <div class="card">${S_AI() ? `<textarea id="ai-q" dir="auto" rows="2" placeholder="For example: remove the first 10 seconds and speed up the slow parts"></textarea><div class="row2"><span class="ai-note" id="ai-est"></span><button class="btn primary sm" id="ai-go">Suggest edits</button></div><div id="ai-out"></div>` : `<p class="muted" style="margin:0">Optional. Add your own API key in Settings and describe the edit in a sentence. Nothing is sent until you press the button.</p><div class="row2"><button class="btn sm" id="ai-set">Set it up</button></div>`}</div>
         <div class="label sm">Cut by time</div>
         <div class="card cutbox"><textarea id="cut-t" rows="3" placeholder="One range per line, for example&#10;0:10-0:25&#10;1:30-2:00"></textarea><p class="ai-note" style="margin:0">Times follow the timeline below. Arabic numbers work too.</p><div class="row2"><button class="btn sm" id="cut-del">Delete these</button><button class="btn sm" id="cut-keep">Keep only these</button></div></div>
         <div class="label sm">Smart tools</div>
         <div class="smart"><button class="sm-b" data-smart="silence"><b>Remove silences</b><span>Cuts every pause longer than a moment</span></button><button class="sm-b" data-smart="idle"><b>Speed up still screen</b><span>Fast-forwards while nothing changes</span></button><button class="sm-b" data-smart="scenes"><b>Find scenes</b><span>Splits where the picture changes</span></button></div>
-        <div class="label sm">Add to the video</div>
-        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="zoom">${I("zoom")}Zoom</button><button class="btn" data-add="voice">${I("mic")}Voice</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>
-        ${cursorCard()}${cardsCard()}${frameCard()}${audioCard()}${changesCard()}
-        ${o ? ovCard(o) : ""}
         ${c ? `<div class="label sm">Selected piece</div><div class="card"><div class="row2"><span>Speed</span><div class="seg fit" id="sp">${SPEEDS.map((s) => `<button data-s="${s}" class="${c.speed === s ? "on" : ""}">${s}×</button>`).join("")}</div></div><div class="row2"><span>Length</span><span class="muted">${fmt(len(c))}</span></div></div>` : ""}
         <div class="label sm">Transition between pieces</div>
         <div class="card"><div class="tgrid" id="tr">${TRANS.map(([k, n]) => `<button data-k="${k}" class="${st.trans.kind === k ? "on" : ""}">${n}</button>`).join("")}</div>
-          ${st.trans.kind !== "none" ? `<div class="row2"><span>Length</span><input type="range" id="tr-d" min="0.2" max="1.5" step="0.1" value="${st.trans.dur}"><span class="muted">${st.trans.dur}s</span></div>${st.clips.length < 2 ? `<p class="muted">Split the video to see it work.</p>` : ""}` : ""}</div>`;
-      $("#rcps", side).onclick = () => openRecipes();
+          ${st.trans.kind !== "none" ? `<div class="row2"><span>Length</span><input type="range" id="tr-d" min="0.2" max="1.5" step="0.1" value="${st.trans.dur}"><span class="muted">${st.trans.dur}s</span></div>${st.clips.length < 2 ? `<p class="muted">Split the video to see it work.</p>` : ""}` : ""}</div>`,
+        add: `<div class="label sm">Add to the video</div>
+        <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="zoom">${I("zoom")}Zoom</button><button class="btn" data-add="voice">${I("mic")}Voice</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>${cardsCard()}`,
+        look: `${frameCard()}${cursorCard()}`,
+        sound: `${audioCard()}`,
+        share: `${chaptersCard()}${changesCard()}`,
+        ai: `<div class="label sm">Ask the AI</div>
+        <div class="card">${S_AI() ? `<textarea id="ai-q" dir="auto" rows="2" placeholder="For example: remove the first 10 seconds and speed up the slow parts"></textarea><div class="row2"><span class="ai-note" id="ai-est"></span><button class="btn primary sm" id="ai-go">Suggest edits</button></div><div id="ai-out"></div>` : `<p class="muted" style="margin:0">Optional. Add your own API key in Settings and describe the edit in a sentence. Nothing is sent until you press the button.</p><div class="row2"><button class="btn sm" id="ai-set">Set it up</button></div>`}</div>`,
+      };
+      side.innerHTML = `<nav class="stabs" role="tablist" aria-label="Editor tools">${TABS.map(([k, ic, n]) => `<button role="tab" class="${st.tab === k ? "on" : ""}" data-tab="${k}" aria-selected="${st.tab === k}">${I(ic)}<span>${n}</span></button>`).join("")}</nav>${o ? `<div class="insp">${ovCard(o)}</div>` : ""}<div class="tabbody">${P[st.tab]}</div>`;
+      $$("[data-tab]", side).forEach((b) => (b.onclick = () => { st.tab = b.dataset.tab; drawSide(); }));
+      const rc = $("#rcps", side); if (rc) rc.onclick = () => openRecipes();
       const qb = $("#quick", side);
       const preview = async () => { try { const pl = await planFor(); st.prev = pl; drawTl(); const i = $("#qinfo", side); if (i) i.textContent = !pl.cuts.length && !pl.fast.length ? (pl.voice ? "Nothing to tidy here." : "No clear voice in this recording, so only still moments would be sped up.") : `Would remove ${pl.cuts.length} dead ${pl.cuts.length === 1 ? "part" : "parts"} and speed up ${pl.fast.length} still ${pl.fast.length === 1 ? "moment" : "moments"}. About ${fmt(pl.saved)} shorter.`; } catch (err) {} };
-      qb.onmouseenter = preview; qb.onmouseleave = () => { st.prev = null; drawTl(); };
+      if (qb) { qb.onmouseenter = preview; qb.onmouseleave = () => { st.prev = null; drawTl(); }; qb.onclick = (ev) => { st.prev = null; cleanup(ev.currentTarget); }; }
       $$("[data-lv]", side).forEach((b) => (b.onclick = () => { st.lv = +b.dataset.lv; $$("[data-lv]", side).forEach((x) => x.classList.toggle("on", x === b)); preview(); }));
-      qb.onclick = (ev) => { st.prev = null; cleanup(ev.currentTarget); };
       const cd = $("#cut-del", side); if (cd) { cd.onclick = () => byTime("cut", $("#cut-t", side).value); $("#cut-keep", side).onclick = () => byTime("keep", $("#cut-t", side).value); const ct = $("#cut-t", side); ct.onkeydown = (ev) => ev.stopPropagation(); ct.value = st.cutText || ""; ct.oninput = () => (st.cutText = ct.value); }
       const ag = $("#ai-go", side); if (ag) { const q = $("#ai-q", side); q.onkeydown = (ev) => ev.stopPropagation(); q.value = st.aiText || ""; ag.onclick = () => askAi(ag); const est = () => { st.aiText = q.value; if (!q.value.trim()) { $("#ai-est", side).textContent = ""; return; } facts().then((f) => invoke("ai_estimate", { instruction: q.value, facts: f })).then((n) => { $("#ai-est", side).textContent = `About ${n} tokens`; }).catch(() => {}); }; let tm; q.oninput = () => { clearTimeout(tm); tm = setTimeout(est, 600); }; }
       const as = $("#ai-set", side); if (as) as.onclick = () => { closeEditor(); window.__goSettings && window.__goSettings(); };
@@ -711,6 +722,32 @@
         <div class="row2"><span>Soft glow around the mouse</span><button class="switch${f.halo ? " on" : ""}" data-cfx="halo" role="switch" aria-checked="${f.halo}"></button></div>
         <p class="ai-note" style="margin:6px 0 0">${n ? n + (n === 1 ? " click" : " clicks") + " found. Click a dot on the Mouse row to zoom in on it." : "No clicks were recorded."}</p></div>`;
     }
+    // YouTube chapters: the first must start at 0:00, there must be at least three, and each at least ten seconds long
+    const ytTime = (t) => { t = Math.round(t); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60; return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`; };
+    function chapterList() {
+      const l = st.chap.map((c) => ({ c, t: srcToTl(c.src) })).filter((x) => x.t != null).sort((a, b) => a.t - b.t);
+      return l;
+    }
+    function chapterText() {
+      const l = chapterList().map((x) => [x.t, (x.c.title || "").trim() || "Part"]);
+      if (!l.length || l[0][0] > 0.5) l.unshift([0, "Intro"]); else l[0][0] = 0;
+      return { l, text: l.map(([t, n]) => `${ytTime(t)} ${n}`).join("\n") };
+    }
+    function chaptersCard() {
+      const l = chapterList(), { l: all, text } = chapterText();
+      const short = all.some((x, i) => i && x[0] - all[i - 1][0] < 10);
+      const note = all.length < 3 ? "YouTube shows chapters only when there are at least three. Press F8 while recording, or add one here." : short ? "Each chapter should be at least 10 seconds long for YouTube to accept them." : "Ready to paste into the video description.";
+      return `<div class="label sm">YouTube chapters</div><div class="card chaps">${l.map((x) => `<div class="chrow2"><button class="chgo" data-chgo="${x.t}" title="Go there">${ytTime(x.t)}</button><input class="txt" data-chn="${x.c.id}" dir="auto" value="${esc(x.c.title)}" aria-label="Chapter title"><button class="chx" data-chd="${x.c.id}" title="Remove" aria-label="Remove chapter">×</button></div>`).join("") || `<p class="ai-note" style="margin:0">No chapters yet.</p>`}
+        <div class="row2"><button class="btn sm" data-chadd="1">Add chapter here</button><button class="btn sm" data-chcopy="1"${all.length ? "" : " disabled"}>Copy for YouTube</button></div>
+        <p class="ai-note" style="margin:6px 0 0">${note}</p></div>`;
+    }
+    function wireChapters() {
+      $$("[data-chgo]", side).forEach((b) => (b.onclick = () => seek(+b.dataset.chgo)));
+      $$("[data-chn]", side).forEach((i) => { i.onkeydown = (e) => e.stopPropagation(); i.oninput = () => { const c = st.chap.find((x) => x.id === +i.dataset.chn); if (c) c.title = i.value; }; });
+      $$("[data-chd]", side).forEach((b) => (b.onclick = () => { st.chap = st.chap.filter((x) => x.id !== +b.dataset.chd); drawSide(); }));
+      const add = $("[data-chadd]", side); if (add) add.onclick = () => { const src = vid.currentTime; if (st.chap.some((c) => Math.abs(c.src - src) < 1)) { toast("There is already a chapter here"); return; } st.chap.push({ id: uid++, src, title: "Part " + (st.chap.length + 1) }); drawSide(); };
+      const cp = $("[data-chcopy]", side); if (cp) cp.onclick = async () => { const { text } = chapterText(); try { await navigator.clipboard.writeText(text); } catch (e) { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); } catch (e2) {} t.remove(); } toast("Chapters copied. Paste them into the video description"); };
+    }
     function changesCard() {
       const rows = [];
       st.ov.slice().sort((a, b) => a.start - b.start).forEach((o) => rows.push([o.start, o.kind === "text" ? "Text: " + (o.text || "").slice(0, 24) : o.kind === "sound" ? (o.voice ? "Your voice" : o.music ? "Music" : "Sound") : o.kind === "box" ? "Highlight" : o.kind === "blur" ? "Blur" : o.kind === "zoom" ? "Zoom" : "Picture", o.id]));
@@ -722,7 +759,7 @@
     }
     function wireCards() {
       $$("[data-goto]", side).forEach((b) => (b.onclick = () => { seek(+b.dataset.goto); if (b.dataset.gid) st.selOv = +b.dataset.gid; else if (b.dataset.gci) st.sel = +b.dataset.gci; drawSide(); drawTl(); }));
-      wireFrame();
+      wireFrame(); wireChapters();
       $$("[data-cfx]", side).forEach((b) => (b.onclick = () => { push(); st.cfx[b.dataset.cfx] = !st.cfx[b.dataset.cfx]; drawSide(); paintFx(); }));
       $$("[data-aud]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.aud] = !st[b.dataset.aud]; drawSide(); }));
       $$("[data-fd]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.fd] = +b.dataset.v; drawSide(); }));

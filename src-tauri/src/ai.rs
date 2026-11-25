@@ -130,65 +130,133 @@ pub fn parse(text: &str, duration: f64) -> Result<(String, Vec<Op>)> {
     Ok((explain, ops))
 }
 
-pub fn default_model(provider: &str) -> &'static str {
-    if provider == "openai" { "gpt-4o-mini" } else { "claude-haiku-5-5" }
+/// How to reach one provider. Everything except Claude speaks the same chat format, so adding a provider is one more row here.
+pub struct Prov {
+    pub id: &'static str,
+    pub url: &'static str,
+    pub model: &'static str,
+    /// whether the provider accepts the "answer as JSON" switch
+    pub json_mode: bool,
 }
 
-fn call(provider: &str, key: &str, model: &str, system: &str, user: &str, max_tokens: u32) -> Result<(String, u64, u64)> {
-    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(60)).build();
-    let resp = if provider == "openai" {
+pub const PROVIDERS: &[Prov] = &[
+    Prov { id: "anthropic", url: "https://api.anthropic.com/v1/messages", model: "claude-haiku-5-5", json_mode: false },
+    Prov { id: "openai", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini", json_mode: true },
+    Prov { id: "gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash", json_mode: false },
+    Prov { id: "openrouter", url: "https://openrouter.ai/api/v1/chat/completions", model: "openai/gpt-4o-mini", json_mode: false },
+    Prov { id: "deepseek", url: "https://api.deepseek.com/chat/completions", model: "deepseek-chat", json_mode: true },
+    Prov { id: "mistral", url: "https://api.mistral.ai/v1/chat/completions", model: "mistral-small-latest", json_mode: true },
+    Prov { id: "groq", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", json_mode: true },
+    Prov { id: "xai", url: "https://api.x.ai/v1/chat/completions", model: "grok-3-mini", json_mode: false },
+    // any service that speaks the same chat format, including a model running on this computer (Ollama, LM Studio)
+    Prov { id: "custom", url: "", model: "", json_mode: false },
+];
+
+fn prov(id: &str) -> &'static Prov {
+    PROVIDERS.iter().find(|p| p.id == id).unwrap_or(&PROVIDERS[0])
+}
+
+pub fn default_model(provider: &str) -> &'static str {
+    prov(provider).model
+}
+
+/// The full address of a custom provider: accepts a base such as http://localhost:11434/v1 or the complete chat address.
+pub fn custom_url(base: &str) -> String {
+    let b = base.trim().trim_end_matches('/');
+    if b.ends_with("/chat/completions") { b.to_string() } else { format!("{b}/chat/completions") }
+}
+
+pub struct Cfg<'a> {
+    pub provider: &'a str,
+    pub key: &'a str,
+    pub model: &'a str,
+    pub base: &'a str,
+}
+
+fn call(c: &Cfg, system: &str, user: &str, max_tokens: u32) -> Result<(String, u64, u64)> {
+    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(90)).build();
+    let p = prov(c.provider);
+    let (provider, key, model) = (c.provider, c.key, c.model);
+    let resp = if provider == "anthropic" {
         agent
-            .post("https://api.openai.com/v1/chat/completions")
-            .set("Authorization", &format!("Bearer {key}"))
-            .send_json(json!({"model": model, "max_tokens": max_tokens, "response_format": {"type": "json_object"}, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}))
-    } else {
-        agent
-            .post("https://api.anthropic.com/v1/messages")
+            .post(p.url)
             .set("x-api-key", key)
             .set("anthropic-version", "2023-06-01")
             .send_json(json!({"model": model, "max_tokens": max_tokens, "system": system, "messages": [{"role": "user", "content": user}]}))
+    } else {
+        let url = if provider == "custom" { custom_url(c.base) } else { p.url.to_string() };
+        if provider == "custom" && !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(anyhow!("Enter the address of the service first, for example http://localhost:11434/v1"));
+        }
+        let mut body = json!({"model": model, "max_tokens": max_tokens, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]});
+        if p.json_mode {
+            body["response_format"] = json!({"type": "json_object"});
+        }
+        let mut r = agent.post(&url);
+        if !key.is_empty() {
+            r = r.set("Authorization", &format!("Bearer {key}"));
+        }
+        r.send_json(body)
     };
     let v: Value = match resp {
         Ok(r) => r.into_json()?,
         Err(ureq::Error::Status(code, r)) => {
             let body: Value = r.into_json().unwrap_or(Value::Null);
-            let msg = body["error"]["message"].as_str().unwrap_or("").to_string();
+            let msg = body["error"]["message"].as_str().or_else(|| body["error"].as_str()).or_else(|| body[0]["error"]["message"].as_str()).unwrap_or("").to_string();
             return Err(anyhow!(match code {
                 401 | 403 => "The key was not accepted. Check that you copied all of it.".to_string(),
                 402 | 429 => format!("The provider refused the request (limit or no credit). {msg}"),
-                404 => format!("That model name is not available for this key. {msg}"),
+                404 => format!("That model name or address is not available for this key. {msg}"),
                 _ => format!("The provider returned an error ({code}). {msg}"),
             }));
         }
         Err(e) => return Err(anyhow!("Could not reach the provider. Check the internet connection. ({e})")),
     };
-    if provider == "openai" {
-        Ok((v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string(), v["usage"]["prompt_tokens"].as_u64().unwrap_or(0), v["usage"]["completion_tokens"].as_u64().unwrap_or(0)))
-    } else {
+    if provider == "anthropic" {
         let text = v["content"].as_array().map(|a| a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("")).unwrap_or_default();
         Ok((text, v["usage"]["input_tokens"].as_u64().unwrap_or(0), v["usage"]["output_tokens"].as_u64().unwrap_or(0)))
+    } else {
+        Ok((v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string(), v["usage"]["prompt_tokens"].as_u64().unwrap_or(0), v["usage"]["completion_tokens"].as_u64().unwrap_or(0)))
     }
 }
 
-pub fn edit(provider: &str, key: &str, model: &str, instruction: &str, f: &Facts) -> Result<Reply> {
-    if key.trim().is_empty() {
+pub fn edit(c: &Cfg, instruction: &str, f: &Facts) -> Result<Reply> {
+    let local = c.provider == "custom";
+    if c.key.trim().is_empty() && !local {
         return Err(anyhow!("Add your API key in Settings first"));
     }
-    let model = if model.trim().is_empty() { default_model(provider) } else { model.trim() };
+    let model = if c.model.trim().is_empty() { default_model(c.provider) } else { c.model.trim() };
+    if model.is_empty() {
+        return Err(anyhow!("Enter the model name in Settings first"));
+    }
     let user = format!("{}\nInstruction: {}", describe(f), instruction.trim());
-    let (text, tin, tout) = call(provider, key.trim(), model, SYSTEM, &user, 900)?;
+    let (text, tin, tout) = call(&Cfg { provider: c.provider, key: c.key.trim(), model, base: c.base }, SYSTEM, &user, 900)?;
     let (explain, ops) = parse(&text, f.duration)?;
     Ok(Reply { explain, ops, tokens_in: tin, tokens_out: tout })
 }
 
-pub fn test(provider: &str, key: &str, model: &str) -> Result<()> {
-    let model = if model.trim().is_empty() { default_model(provider) } else { model.trim() };
-    call(provider, key.trim(), model, "Reply with the single word OK.", "Hello", 8).map(|_| ())
+pub fn test(c: &Cfg) -> Result<()> {
+    let model = if c.model.trim().is_empty() { default_model(c.provider) } else { c.model.trim() };
+    if model.is_empty() {
+        return Err(anyhow!("Enter the model name first"));
+    }
+    call(&Cfg { provider: c.provider, key: c.key.trim(), model, base: c.base }, "Reply with the single word OK.", "Hello", 8).map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knows_every_provider_and_builds_custom_addresses() {
+        for id in ["anthropic", "openai", "gemini", "openrouter", "deepseek", "mistral", "groq", "xai"] {
+            assert!(!default_model(id).is_empty(), "{id}");
+            assert!(prov(id).url.starts_with("https://"), "{id}");
+        }
+        assert_eq!(custom_url("http://localhost:11434/v1/"), "http://localhost:11434/v1/chat/completions");
+        assert_eq!(custom_url("http://x/v1/chat/completions"), "http://x/v1/chat/completions");
+        assert_eq!(default_model("something else"), default_model("anthropic"));
+    }
 
     #[test]
     fn describes_compactly() {
@@ -226,7 +294,8 @@ mod tests {
 
     #[test]
     fn needs_a_key() {
-        assert!(edit("anthropic", " ", "", "x", &Facts::default()).is_err());
+        assert!(edit(&Cfg { provider: "anthropic", key: " ", model: "", base: "" }, "x", &Facts::default()).is_err());
+        assert!(edit(&Cfg { provider: "custom", key: "", model: "", base: "" }, "x", &Facts::default()).is_err());
         assert_eq!(default_model("openai"), "gpt-4o-mini");
     }
 }

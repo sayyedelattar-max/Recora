@@ -60,6 +60,11 @@ pub struct Settings {
     pub ai_provider: String,
     pub ai_key: String,
     pub ai_model: String,
+    /// keys and model names per provider, so switching provider never reuses another provider's key
+    pub ai_keys: std::collections::BTreeMap<String, String>,
+    pub ai_models: std::collections::BTreeMap<String, String>,
+    /// address of a custom provider (for example a model running on this computer)
+    pub ai_base: String,
     pub labels_left: u32, // recordings left in which the recording pill shows all labels
 }
 
@@ -94,6 +99,9 @@ impl Default for Settings {
             ai_provider: "anthropic".into(),
             ai_key: String::new(),
             ai_model: String::new(),
+            ai_keys: Default::default(),
+            ai_models: Default::default(),
+            ai_base: String::new(),
             labels_left: 3,
         }
     }

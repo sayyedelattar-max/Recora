@@ -716,12 +716,19 @@ async fn edit_probe(path: String) -> R<library::Item> {
 }
 #[tauri::command]
 async fn ai_edit(state: State<'_, AppState>, instruction: String, facts: ai::Facts) -> R<ai::Reply> {
-    let (p, k, m) = { let s = state.settings.lock(); (s.ai_provider.clone(), s.ai_key.clone(), s.ai_model.clone()) };
-    tauri::async_runtime::spawn_blocking(move || ai::edit(&p, &k, &m, &instruction, &facts).map_err(e2s)).await.map_err(e2s)?
+    let (p, k, m, b) = {
+        let s = state.settings.lock();
+        let p = s.ai_provider.clone();
+        let k = s.ai_keys.get(&p).cloned().unwrap_or_else(|| s.ai_key.clone());
+        let m = s.ai_models.get(&p).cloned().unwrap_or_else(|| s.ai_model.clone());
+        (p, k, m, s.ai_base.clone())
+    };
+    tauri::async_runtime::spawn_blocking(move || ai::edit(&ai::Cfg { provider: &p, key: &k, model: &m, base: &b }, &instruction, &facts).map_err(e2s)).await.map_err(e2s)?
 }
 #[tauri::command]
-async fn ai_test(provider: String, key: String, model: String) -> R<()> {
-    tauri::async_runtime::spawn_blocking(move || ai::test(&provider, &key, &model).map_err(e2s)).await.map_err(e2s)?
+async fn ai_test(provider: String, key: String, model: String, base: Option<String>) -> R<()> {
+    let base = base.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || ai::test(&ai::Cfg { provider: &provider, key: &key, model: &model, base: &base }).map_err(e2s)).await.map_err(e2s)?
 }
 #[tauri::command]
 fn ai_estimate(instruction: String, facts: ai::Facts) -> u64 {

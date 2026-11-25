@@ -13,7 +13,6 @@
   const persist = debounce(() => invoke("set_settings", { new: S }), 200);
   const set = (k, v, rerender = true) => { if (k === "blur_level") v = +v; S[k] = v; persist(); if (k === "theme") applyTheme(v); if (rerender) render(); if (k === "mic" || k === "out_dir") preflight(); };
 
-  window.__ai = () => !!(S && S.ai_key);
   window.__S = () => S;
   window.__lib = () => lib;
   window.__goPage = (p) => go(p);
@@ -263,23 +262,39 @@
   }
 
 
-  // ---------------------------------------------------------------- AI key help
+  // ---------------------------------------------------------------- AI providers
+  const AI_PROVIDERS = [
+    ["anthropic", "Claude (Anthropic)", "claude-haiku-5-5"], ["openai", "OpenAI (ChatGPT)", "gpt-4o-mini"], ["gemini", "Google Gemini", "gemini-2.5-flash"],
+    ["openrouter", "OpenRouter (hundreds of models)", "openai/gpt-4o-mini"], ["deepseek", "DeepSeek", "deepseek-chat"], ["mistral", "Mistral", "mistral-small-latest"],
+    ["groq", "Groq (very fast)", "llama-3.3-70b-versatile"], ["xai", "xAI (Grok)", "grok-3-mini"], ["custom", "Other or on this computer", ""],
+  ];
+  const aiKey = () => (S.ai_keys && S.ai_keys[S.ai_provider]) || (Object.keys(S.ai_keys || {}).length ? "" : S.ai_key || "");
+  window.__ai = () => !!aiKey() || (S && S.ai_provider === "custom" && !!S.ai_base);
   function openAiHelp() {
     const guides = {
       anthropic: { name: "Claude (Anthropic)", url: "https://console.anthropic.com/settings/keys", steps: ["Open console.anthropic.com and sign in or create an account.", "Go to Settings, then Billing, and add a small credit such as 5 dollars. A chat subscription does not include this; the API is paid per use.", "Go to API keys and press Create key. Name it Recora.", "Copy the key (it starts with sk-ant-) and paste it in Recora's settings. You will not be able to see it again, so keep a copy."] },
       openai: { name: "OpenAI", url: "https://platform.openai.com/api-keys", steps: ["Open platform.openai.com and sign in or create an account.", "Go to Billing and add a small credit such as 5 dollars. A ChatGPT subscription does not include this; the API is paid per use.", "Go to API keys and press Create new secret key. Name it Recora.", "Copy the key (it starts with sk-) and paste it in Recora's settings. You will not be able to see it again, so keep a copy."] },
     };
+    const more = (name, url, steps) => ({ name, url, steps });
+    guides.gemini = more("Google Gemini", "https://aistudio.google.com/apikey", ["Open aistudio.google.com and sign in with a Google account.", "Press Get API key, then Create API key.", "Copy the key and paste it in Recora's settings. Google may offer a free allowance for light use; check their page for the current limits."]);
+    guides.openrouter = more("OpenRouter", "https://openrouter.ai/keys", ["Open openrouter.ai and sign in or create an account.", "Add a small credit from the Credits page, or pick a model marked free.", "Go to Keys, press Create key, and paste it in Recora's settings.", "In the Model box, type the model name you want, such as anthropic/claude-haiku-4.5 or google/gemini-2.5-flash."]);
+    guides.deepseek = more("DeepSeek", "https://platform.deepseek.com/api_keys", ["Open platform.deepseek.com and sign in or create an account.", "Add a small top-up from the Top up page.", "Go to API keys, press Create new API key, and paste it in Recora's settings."]);
+    guides.mistral = more("Mistral", "https://console.mistral.ai/api-keys", ["Open console.mistral.ai and sign in or create an account.", "Choose a plan in Billing (there may be a free tier for testing).", "Go to API keys, press Create new key, and paste it in Recora's settings."]);
+    guides.groq = more("Groq", "https://console.groq.com/keys", ["Open console.groq.com and sign in or create an account.", "Go to API Keys and press Create API Key.", "Copy the key and paste it in Recora's settings. Groq may offer a free allowance for light use; check their page for the current limits."]);
+    guides.xai = more("xAI (Grok)", "https://console.x.ai", ["Open console.x.ai and sign in or create an account.", "Add a small credit in Billing.", "Create an API key and paste it in Recora's settings."]);
+    guides.custom = more("another service or a model on this computer", "https://ollama.com", ["Any service that accepts the common chat format works: type its address in the Address box in Settings, for example http://localhost:11434/v1 for Ollama running on this computer.", "Type the model name exactly as the service lists it, for example llama3.1.", "A key is only needed if the service asks for one. Models on this computer are free and nothing leaves it."]);
     const el = document.createElement("div"); el.className = "veil"; document.body.appendChild(el);
     const draw = () => {
       const g = guides[S.ai_provider] || guides.anthropic;
+      const paid = ["Go to Billing and add a small credit such as 5 dollars. A chat subscription does not include this; the API is paid per use."];
       el.innerHTML = `<div class="modal"><div class="ap-head"><div><h3>Get a key for ${g.name}</h3><p class="muted">The key is a password that lets Recora ask the AI on your account. You pay the provider directly, only for what you use.</p></div><button class="close-x flat" id="hx">${I("x")}</button></div>
-        <div class="ap-tools" style="padding-bottom:0">${segHtml("ai_provider", [["anthropic", "Claude"], ["openai", "OpenAI"]], true)}</div>
+        <div class="ap-tools" style="padding-bottom:0"><select id="hp" class="txt">${AI_PROVIDERS.map(([v, n]) => `<option value="${v}"${S.ai_provider === v ? " selected" : ""}>${n}</option>`).join("")}</select></div>
         <ol class="steps">${g.steps.map((s) => `<li>${s}</li>`).join("")}</ol>
         <div class="ap-foot"><b>What it costs.</b> Each request sends about 600 to 1,500 tokens and gets about 300 back. With the low-cost models that is usually a fraction of a cent, so 5 dollars lasts for hundreds of requests. Check your provider's current prices.</div>
         <div style="display:flex;gap:8px;justify-content:flex-end;padding:0 20px 18px"><button class="btn" id="hc">Close</button><button class="btn primary" id="ho">Open the key page</button></div></div>`;
       $("#hx", el).onclick = $("#hc", el).onclick = () => { el.remove(); renderSettings(); };
       $("#ho", el).onclick = () => invoke("open_url", { url: g.url }).catch((e) => toast(e, true));
-      $$("[data-seg=ai_provider] button", el).forEach((b) => (b.onclick = () => { S.ai_provider = b.dataset.v; persist(); draw(); }));
+      $("#hp", el).onchange = (e) => { S.ai_provider = e.target.value; persist(); draw(); };
     };
     el.addEventListener("mousedown", (e) => { if (e.target === el) { el.remove(); renderSettings(); } });
     draw();
@@ -453,9 +468,10 @@
         <p class="foot">Suggest shows one quiet note when an edit would clearly save time, and only then. Polish for me makes a tightened copy by itself and never changes the original.</p>
         <div class="label">AI assistant (optional)</div>
         <div class="group">
-          <div class="row"><div class="t"><b>Provider</b></div>${segHtml("ai_provider", [["anthropic", "Claude"], ["openai", "OpenAI"]], true)}</div>
-          <div class="row"><div class="t"><b>API key</b><span>Stored on this computer only</span></div><input type="password" id="ai-key" class="txt" placeholder="Paste your key" value="${esc(S.ai_key || "")}" autocomplete="off" spellcheck="false"><button class="btn sm" id="ai-test">Test</button></div>
-          <div class="row"><div class="t"><b>Model</b><span>Leave empty to use the low-cost default</span></div><input id="ai-model" class="txt" placeholder="${S.ai_provider === "openai" ? "gpt-4o-mini" : "claude-haiku-5-5"}" value="${esc(S.ai_model || "")}" autocomplete="off" spellcheck="false"></div>
+          <div class="row"><div class="t"><b>Provider</b><span>Pick the service you have an account with</span></div><select id="ai-prov" class="txt">${AI_PROVIDERS.map(([v, n]) => `<option value="${v}"${S.ai_provider === v ? " selected" : ""}>${n}</option>`).join("")}</select></div>
+          ${S.ai_provider === "custom" ? `<div class="row"><div class="t"><b>Address</b><span>For example http://localhost:11434/v1</span></div><input id="ai-base" class="txt" placeholder="https://" value="${esc(S.ai_base || "")}" autocomplete="off" spellcheck="false"></div>` : ""}
+          <div class="row"><div class="t"><b>API key</b><span>${S.ai_provider === "custom" ? "Only if the service asks for one" : "Stored on this computer only"}</span></div><input type="password" id="ai-key" class="txt" placeholder="Paste your key" value="${esc(aiKey())}" autocomplete="off" spellcheck="false"><button class="btn sm" id="ai-test">Test</button></div>
+          <div class="row"><div class="t"><b>Model</b><span>${S.ai_provider === "custom" || S.ai_provider === "openrouter" ? "Type the model name" : "Leave empty to use the low-cost default"}</span></div><input id="ai-model" class="txt" placeholder="${(AI_PROVIDERS.find((p) => p[0] === S.ai_provider) || [])[2] || "model name"}" value="${esc((S.ai_models && S.ai_models[S.ai_provider]) || "")}" autocomplete="off" spellcheck="false"></div>
           <div class="row"><div class="t"><b>Don't have a key?</b><span>Step by step, about two minutes</span></div><button class="btn sm" id="ai-help">Show me how</button></div>
         </div>
         <p class="foot">Everything works without it. With a key, you can type a sentence such as “remove the first 10 seconds and speed up the boring parts” and the editor prepares the edits for you to review. It never receives your video or sound, only the length and the times of pauses and scene changes: roughly 600 to 1,500 tokens a request, usually a fraction of a cent.</p>
@@ -469,12 +485,15 @@
         <p class="foot" style="margin-top:28px">Recora 2.0 · LocMasters</p>
       </div>`;
     $("#pick-blur2").onclick = openBlurPicker;
-    $("#ai-key").oninput = (e) => { S.ai_key = e.target.value.trim(); persist(); };
-    $("#ai-model").oninput = (e) => { S.ai_model = e.target.value.trim(); persist(); };
+    S.ai_keys = S.ai_keys || {}; S.ai_models = S.ai_models || {};
+    $("#ai-prov").onchange = (e) => { S.ai_provider = e.target.value; persist(); renderSettings(); };
+    const ab = $("#ai-base"); if (ab) ab.oninput = (e) => { S.ai_base = e.target.value.trim(); persist(); };
+    $("#ai-key").oninput = (e) => { S.ai_keys[S.ai_provider] = e.target.value.trim(); S.ai_key = S.ai_keys[S.ai_provider]; persist(); };
+    $("#ai-model").oninput = (e) => { S.ai_models[S.ai_provider] = e.target.value.trim(); S.ai_model = S.ai_models[S.ai_provider]; persist(); };
     $("#ai-help").onclick = openAiHelp;
     $("#ai-test").onclick = async (e) => {
       const b = e.currentTarget; b.disabled = true; b.textContent = "Testing…";
-      try { await invoke("ai_test", { provider: S.ai_provider, key: S.ai_key || "", model: S.ai_model || "" }); toast("The key works"); } catch (err) { toast(err, true); }
+      try { await invoke("ai_test", { provider: S.ai_provider, key: aiKey(), model: (S.ai_models || {})[S.ai_provider] || "", base: S.ai_base || "" }); toast("The key works"); } catch (err) { toast(err, true); }
       b.disabled = false; b.textContent = "Test";
     };
     $("#add-zone").onclick = () => invoke("pick_zone").catch((e) => toast(e, true));
