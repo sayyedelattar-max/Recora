@@ -7,6 +7,9 @@
     mic: '<rect x="9" y="4" width="6" height="10" rx="3"/><path d="M6 11a6 6 0 0012 0M12 17v3"/>',
     zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4M11 8.5v5M8.5 11h5"/>',
     image: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.4"/><path d="M5 17l4.5-4.5 3 3 2.5-2.5L20 17"/>',
+    lock: '<rect x="6" y="11" width="12" height="8" rx="2"/><path d="M9 11V8a3 3 0 016 0v3"/>',
+    unlock: '<rect x="6" y="11" width="12" height="8" rx="2"/><path d="M9 11V8a3 3 0 015.6-1.5"/>',
+    mute: '<path d="M4 10v4h3l4 3.5v-11L7 10H4zM16 9.5l4 5M20 9.5l-4 5"/>',
     sound: '<path d="M4 10v4h3l4 3.5v-11L7 10H4zM15 9.5a3.5 3.5 0 010 5M17.5 7a7 7 0 010 10"/>',
     blur: '<rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M8 10h8M8 14h5" opacity=".55"/>',
     undo: '<path d="M9 7L4.5 11.5 9 16M5 11.5h9a5 5 0 0 1 0 10h-2"/>',
@@ -32,11 +35,11 @@
   window.openEditor = function (it, onDone, opts = {}) {
     closeEditor();
     const dur = it.duration || 1;
-    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", wave: null, q: null, prev: null, lv: 2, rec: null, ar: 16 / 9, busy: false };
+    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, lk: {}, muteOrig: false, cur: [], cfx: { rings: false, halo: false }, fr: { kind: "", color: "#101828", color2: "#f8cdda", path: "", pad: 0.07, radius: 0.02, shadow: true }, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", wave: null, q: null, prev: null, lv: 2, rec: null, ar: 16 / 9, busy: false };
     const hist = [];
-    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro, a: [st.dn, st.duck, st.fi, st.fo] });
+    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro, a: [st.dn, st.duck, st.fi, st.fo], f: st.fr, m: st.muteOrig });
     const push = () => { hist.push(snap()); if (hist.length > 60) hist.shift(); };
-    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.intro = d.i || null; st.outro = d.u || null; if (d.a) [st.dn, st.duck, st.fi, st.fo] = d.a; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
+    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.intro = d.i || null; st.outro = d.u || null; if (d.a) [st.dn, st.duck, st.fi, st.fo] = d.a; if (d.f) st.fr = d.f; st.muteOrig = !!d.m; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
 
     const len = (c) => (c.end - c.start) / c.speed;
     const total = () => st.clips.reduce((s, c) => s + len(c), 0);
@@ -47,7 +50,7 @@
     el.className = "ed"; el.id = "editor";
     el.innerHTML = `<div class="ed-mb" id="mb">${["File", "Edit", "Clip", "Add", "Tools", "View", "Help"].map((n) => `<button data-m="${n}">${n}</button>`).join("")}<span class="grow" data-tauri-drag-region></span><div class="winbtns"><button data-w="min" title="Minimize">${I("min")}</button><button data-w="max" title="Maximize">${I("max")}</button><button data-w="close" class="close" title="Close">${I("x")}</button></div></div><div class="ed-top"><button class="btn sm" id="ed-x">${I("x")}Close</button><div class="ed-title" id="ed-title"></div><span class="grow"></span><div class="seg fit" id="ed-pre">${PRESETS.map(([k, n]) => `<button data-k="${k}">${n}</button>`).join("")}</div><button class="btn primary" id="ed-go">Export</button></div>
       <div class="ed-main">
-        <div class="ed-stage"><div class="ed-frame" id="frame"><video id="ev" src="${fileUrl(it.path)}" preload="auto" playsinline></video><div class="ed-spl" id="spl"></div><div class="ed-ovl" id="ovl"></div></div></div>
+        <div class="ed-stage"><div class="ed-canvas" id="canvas"><div class="ed-frame" id="frame"><video id="ev" src="${fileUrl(it.path)}" preload="auto" playsinline></video><div class="ed-spl" id="spl"></div><div class="ed-ovl" id="ovl"></div></div></div></div>
         <aside class="ed-side" id="side"></aside>
       </div>
       <div class="ed-bar"><button class="btn sm" id="b-play"></button><span class="ed-time" id="b-time">00:00 / 00:00</span><span class="grow"></span>
@@ -58,6 +61,7 @@
     const vid = $("#ev", el);
     const tlEl = $("#tl", el), side = $("#side", el), ovl = $("#ovl", el), frame = $("#frame", el);
     invoke("edit_analyze_quick", { path: it.path }).then((a) => { st.q = a; drawTl(); }).catch(() => {});
+    invoke("edit_cursor", { path: it.path }).then((c) => { st.cur = Array.isArray(c) && c.length > 1 ? c : []; if (st.cur.length) { drawTl(); drawSide(); } }).catch(() => {});
     invoke("edit_wave", { path: it.path }).then((p) => { st.wave = p ? fileUrl(p) : ""; drawTl(); }).catch(() => {});
     invoke("edit_strip", { path: it.path, n: 24 }).then((p) => { if (p) { st.strip = fileUrl(p); draw(); } }).catch(() => {});
 
@@ -78,7 +82,7 @@
         } else if (a && !a.paused) a.pause();
       }
       for (const [id, a] of aud) if (!st.ov.some((o) => o.id === id)) { a.pause(); aud.delete(id); }
-      if (!st.rec) vid.volume = duck ? 0.25 : 1;
+      if (!st.rec) { vid.volume = duck ? 0.25 : 1; vid.muted = st.muteOrig; }
     }
     function seek(t) {
       st.t = clamp(t, 0, total());
@@ -257,7 +261,7 @@
     }
 
     // ---------------------------------------------------------------- timeline
-    const LAB = 78;
+    const LAB = 96;
     // the start and end of every silence: natural places to cut
     const pauseEdges = () => (st.q && st.q.voice ? st.q.silences.flat() : []);
     const pps = () => Math.max(20, ((tlEl.clientWidth - LAB - 14) / Math.max(total(), 1)) * st.zoom);
@@ -283,15 +287,19 @@
       const q = st.q, pv = st.prev;
       const vBands = (q ? bandsOf(q.idle.filter(([a, b]) => b - a >= 2), "idle", 'title="Still screen: click for options"') : "") + (pv ? bandsOf(pv.cuts, "pcut", 'title="Will be removed"') + bandsOf(pv.fast, "pfast", 'title="Will be sped up"') : "");
       const aBands = q && q.voice ? bandsOf(q.silences, "sil", 'title="Silence: click for options"') : "";
-      const row = (name, id, h, body) => `<div class="tr"><div class="lab">${name}</div><div class="bd" id="${id}" style="height:${h}px">${body}</div></div>`;
+      const LK = { tcl: "v", taud: "a", tov: "e", tbg: "b" };
+      const row = (name, id, h, body) => { const lk = LK[id] && st.lk[LK[id]]; return `<div class="tr"><div class="lab"><span>${name}</span>${LK[id] ? `<button class="lkb${lk ? " on" : ""}" data-lk="${LK[id]}" title="${lk ? "Unlock" : "Lock"} this row" aria-label="${lk ? "Unlock" : "Lock"} ${name}">${I(lk ? "lock" : "unlock")}</button>` : ""}${id === "taud" ? `<button class="lkb${st.muteOrig ? " on" : ""}" data-mute="1" title="${st.muteOrig ? "Original sound is off" : "Silence the original sound"}" aria-label="Silence the original sound">${I(st.muteOrig ? "mute" : "sound")}</button>` : ""}</div><div class="bd${lk ? " lk" : ""}" id="${id}" style="height:${h}px">${body}</div></div>`; };
       tlEl.innerHTML = `<div class="tl-in" style="width:${W + LAB + 14}px"><div class="tr"><div class="lab"></div><div class="tl-ruler bd" id="ruler">${ticks}</div></div>
-        ${row("Video", "tcl", 76, clips + vBands)}${row("Transitions", "ttr", 26, jn)}${row("Audio", "taud", 36 + (ps.n ? ps.n * 22 + 4 : 0), waves + aBands + snd.map((o) => bar(o, 38, ps.lane.get(o.id))).join(""))}${row("Effects", "tov", Math.max(1, pf.n) * 22 + 6, fx.map((o) => bar(o, 0, pf.lane.get(o.id))).join("") || `<em>Add text, a highlight, a blur or a picture from the side panel</em>`)}<i class="ph2" id="ph2"></i></div>`;
+        ${row("Video", "tcl", 76, clips + vBands)}${row("Transitions", "ttr", 26, jn)}${row("Audio", "taud", 36 + (ps.n ? ps.n * 22 + 4 : 0), waves + aBands + snd.map((o) => bar(o, 38, ps.lane.get(o.id))).join(""))}${row("Effects", "tov", Math.max(1, pf.n) * 22 + 6, fx.map((o) => bar(o, 0, pf.lane.get(o.id))).join("") || `<em>Add text, a highlight, a blur or a picture from the side panel</em>`)}${st.cur.length ? row("Mouse", "tmo", 26, clicksSrc().map((c) => { const t = srcToTl(c[0]); return t == null ? "" : `<i class="clk" data-cx="${c[1]}" data-cy="${c[2]}" data-ct="${c[0]}" style="left:${t * k}px" title="Click at ${fmt(t)}"></i>`; }).join("") || "<em>No clicks were recorded</em>") : ""}${row("Backdrop", "tbg", 26, st.fr.kind ? `<div class="bar bgbar" id="bgbar" style="left:0;width:${total() * k}px">${FR_KINDS.find((k) => k[0] === st.fr.kind)[1]} behind the picture</div>` : `<em>Put the picture on a colour, a gradient or a photo from the side panel</em>`)}<i class="ph2" id="ph2"></i></div>`;
       tlEl.querySelector(".tl-in").style.setProperty("--k", k);
       wireTl(k); paintHead();
     }
     function paintHead() { const k = pps(); const p = $("#ph2", el); if (p) p.style.left = LAB + st.t * k + "px"; }
     function timeAt(ev) { const r = $("#ruler", el).getBoundingClientRect(); return clamp((ev.clientX - r.left) / pps(), 0, total()); }
     function wireTl() {
+      $$(".clk", el).forEach((d) => (d.onclick = (ev) => { ev.stopPropagation(); const r = d.getBoundingClientRect(), cx = +d.dataset.cx, cy = +d.dataset.cy, t = srcToTl(+d.dataset.ct); showMenu(r.left, r.bottom + 4, [{ label: "Zoom in on this click", fn: () => { push(); const T = total(), s0 = clamp(t - 0.3, 0, Math.max(0, T - 0.5)), w = 0.4, h = 0.4; const o = { id: uid++, kind: "zoom", start: r2(s0), end: r2(Math.min(T, s0 + 3)), x: clamp(cx - w / 2, 0, 1 - w), y: clamp(cy - h / 2, 0, 1 - h), w, h, text: "", size: 0.06, color: "#ffffff", level: 2, bg: true }; st.ov.push(o); st.selOv = o.id; st.sel = -1; draw(); } }, { label: "Go to this click", fn: () => seek(Math.max(0, t - 0.5)) }]); }));
+      $$("[data-lk]", el).forEach((b) => (b.onclick = () => { st.lk[b.dataset.lk] = !st.lk[b.dataset.lk]; drawTl(); }));
+      $$("[data-mute]", el).forEach((b) => (b.onclick = () => { push(); st.muteOrig = !st.muteOrig; syncSounds(); drawTl(); toast(st.muteOrig ? "The original sound is off in the final video" : "The original sound is back"); }));
       const scrub = (ev) => { setPlay(false); seek(timeAt(ev)); };
       const drag = (fn) => (e) => { e.preventDefault(); const mv = (ev) => fn(ev); const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); }; window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up); };
       $("#ruler", el).onpointerdown = (e) => { scrub(e); drag(scrub)(e); };
@@ -556,7 +564,7 @@
         <div class="smart"><button class="sm-b" data-smart="silence"><b>Remove silences</b><span>Cuts every pause longer than a moment</span></button><button class="sm-b" data-smart="idle"><b>Speed up still screen</b><span>Fast-forwards while nothing changes</span></button><button class="sm-b" data-smart="scenes"><b>Find scenes</b><span>Splits where the picture changes</span></button></div>
         <div class="label sm">Add to the video</div>
         <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="zoom">${I("zoom")}Zoom</button><button class="btn" data-add="voice">${I("mic")}Voice</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>
-        ${cardsCard()}${audioCard()}
+        ${cursorCard()}${cardsCard()}${frameCard()}${audioCard()}${changesCard()}
         ${o ? ovCard(o) : ""}
         ${c ? `<div class="label sm">Selected piece</div><div class="card"><div class="row2"><span>Speed</span><div class="seg fit" id="sp">${SPEEDS.map((s) => `<button data-s="${s}" class="${c.speed === s ? "on" : ""}">${s}×</button>`).join("")}</div></div><div class="row2"><span>Length</span><span class="muted">${fmt(len(c))}</span></div></div>` : ""}
         <div class="label sm">Transition between pieces</div>
@@ -663,7 +671,59 @@
         ${hasMusic ? `<div class="row2"><span>Lower music while I speak</span><button class="switch${st.duck ? " on" : ""}" data-aud="duck" role="switch" aria-checked="${st.duck}"></button></div>` : ""}
         <div class="row2"><span>Fade in</span>${fseg("fi", st.fi)}</div><div class="row2"><span>Fade out</span>${fseg("fo", st.fo)}</div></div>`;
     }
+    // the left or right button going down, in recording time
+    const clicksSrc = () => { const o = []; let prev = 0; for (const p of st.cur) { if (p[3] && !prev) o.push([p[0], p[1], p[2]]); prev = p[3]; } return o; };
+    const FR_KINDS = [["", "Off"], ["color", "Colour"], ["gradient", "Gradient"], ["image", "Picture"], ["blur", "Blurred"]];
+    const FR_GRAD = [["#1d2b64", "#f8cdda"], ["#0f2027", "#2c5364"], ["#ff9966", "#ff5e62"], ["#4776e6", "#8e54e9"], ["#134e5e", "#71b280"], ["#232526", "#414345"]];
+    const fseg2 = (k, list, cur) => `<div class="seg fit">${list.map(([v, n]) => `<button data-fr="${k}" data-v="${v}" class="${cur === v ? "on" : ""}">${n}</button>`).join("")}</div>`;
+    function frameCard() {
+      const f = st.fr;
+      return `<div class="label sm">Background behind the picture</div><div class="card"><div class="row2">${fseg2("kind", FR_KINDS, f.kind)}</div>
+        ${f.kind === "color" ? `<div class="row2"><span>Colour</span><div class="sws">${SW(CARD_BG.concat(["#ffffff", "#0a84ff", "#ff375f"]), f.color, "data-frc")}</div></div>` : ""}
+        ${f.kind === "gradient" ? `<div class="row2"><span>Gradient</span><div class="sws">${FR_GRAD.map(([a, b]) => `<button class="sw${f.color === a && f.color2 === b ? " on" : ""}" data-frg="${a}|${b}" style="background:linear-gradient(135deg,${a},${b})"></button>`).join("")}</div></div>` : ""}
+        ${f.kind === "image" ? `<div class="row2"><span>${f.path ? esc(f.path.split(/[\\/]/).pop()) : "No picture yet"}</span><button class="btn sm" data-fr="pick">Choose picture…</button></div>` : ""}
+        ${f.kind ? `<div class="row2"><span>Margin</span>${fseg2("pad", [[0.04, "Small"], [0.07, "Medium"], [0.12, "Large"]], f.pad)}</div>
+        <div class="row2"><span>Corners</span>${fseg2("radius", [[0, "Square"], [0.02, "Soft"], [0.05, "Round"]], f.radius)}</div>
+        <div class="row2"><span>Shadow</span><button class="switch${f.shadow ? " on" : ""}" data-fr="shadow" role="switch" aria-checked="${f.shadow}"></button></div>` : ""}</div>`;
+    }
+    function paintFrame() {
+      const f = st.fr, cv = $("#canvas", el); if (!cv) return;
+      if (!f.kind) { cv.style.background = ""; frame.style.transform = ""; frame.style.borderRadius = ""; frame.style.boxShadow = ""; frame.style.overflow = ""; return; }
+      cv.style.background = f.kind === "gradient" ? `linear-gradient(135deg,${f.color},${f.color2})` : f.kind === "image" && f.path ? `center / cover url("${fileUrl(f.path)}")` : f.kind === "blur" ? "linear-gradient(135deg,#2a2f45,#4b3b5c)" : f.color;
+      frame.style.transform = `scale(${1 - 2 * f.pad})`; frame.style.overflow = "hidden";
+      frame.style.borderRadius = Math.round(frame.offsetHeight * f.radius * (1 - 2 * f.pad)) + "px"; frame.style.boxShadow = f.shadow ? "0 14px 40px rgba(0,0,0,.45)" : "none";
+    }
+    function wireFrame() {
+      $$("[data-fr]", side).forEach((b) => (b.onclick = async () => {
+        const k = b.dataset.fr; push();
+        if (k === "pick") { const p = await pickFile(["png", "jpg", "jpeg", "webp"], "Picture"); if (!p) return; st.fr.path = p; }
+        else if (k === "shadow") st.fr.shadow = !st.fr.shadow;
+        else st.fr[k] = k === "kind" ? b.dataset.v : +b.dataset.v;
+        paintFrame(); drawSide(); drawTl();
+      }));
+      $$("[data-frc]", side).forEach((b) => (b.onclick = () => { push(); st.fr.color = b.dataset.frc; paintFrame(); drawSide(); }));
+      $$("[data-frg]", side).forEach((b) => (b.onclick = () => { push(); [st.fr.color, st.fr.color2] = b.dataset.frg.split("|"); paintFrame(); drawSide(); }));
+    }
+    function cursorCard() {
+      if (!st.cur.length) return "";
+      const n = clicksSrc().length, f = st.cfx;
+      return `<div class="label sm">Mouse</div><div class="card"><div class="row2"><span>Ring on every click</span><button class="switch${f.rings ? " on" : ""}" data-cfx="rings" role="switch" aria-checked="${f.rings}"></button></div>
+        <div class="row2"><span>Soft glow around the mouse</span><button class="switch${f.halo ? " on" : ""}" data-cfx="halo" role="switch" aria-checked="${f.halo}"></button></div>
+        <p class="ai-note" style="margin:6px 0 0">${n ? n + (n === 1 ? " click" : " clicks") + " found. Click a dot on the Mouse row to zoom in on it." : "No clicks were recorded."}</p></div>`;
+    }
+    function changesCard() {
+      const rows = [];
+      st.ov.slice().sort((a, b) => a.start - b.start).forEach((o) => rows.push([o.start, o.kind === "text" ? "Text: " + (o.text || "").slice(0, 24) : o.kind === "sound" ? (o.voice ? "Your voice" : o.music ? "Music" : "Sound") : o.kind === "box" ? "Highlight" : o.kind === "blur" ? "Blur" : o.kind === "zoom" ? "Zoom" : "Picture", o.id]));
+      let t0 = 0; st.clips.forEach((c, i) => { const d = (c.end - c.start) / c.speed; if (c.speed !== 1) rows.push([t0, `Speed ${c.speed}×`, null, i]); t0 += d; });
+      rows.sort((a, b) => a[0] - b[0]);
+      if (!rows.length && !st.intro && !st.outro && !st.fr.kind && !st.dn && !st.muteOrig) return "";
+      const extra = [st.intro ? "Opening title" : "", st.outro ? "Closing title" : "", st.fr.kind ? "Background" : "", st.dn ? "Noise cleaned" : "", st.muteOrig ? "Original sound off" : "", st.clips.length > 1 ? `${st.clips.length} pieces` : ""].filter(Boolean);
+      return `<details class="chg" open><summary class="label sm">What changed</summary><div class="card">${rows.map(([t, n, id, ci]) => `<button class="chrow" data-goto="${t}" data-gid="${id || ""}" data-gci="${ci ?? ""}"><b>${fmt(t)}</b><span>${esc(n)}</span></button>`).join("")}${extra.length ? `<p class="ai-note" style="margin:6px 0 0">${extra.join(" · ")}</p>` : ""}</div></details>`;
+    }
     function wireCards() {
+      $$("[data-goto]", side).forEach((b) => (b.onclick = () => { seek(+b.dataset.goto); if (b.dataset.gid) st.selOv = +b.dataset.gid; else if (b.dataset.gci) st.sel = +b.dataset.gci; drawSide(); drawTl(); }));
+      wireFrame();
+      $$("[data-cfx]", side).forEach((b) => (b.onclick = () => { push(); st.cfx[b.dataset.cfx] = !st.cfx[b.dataset.cfx]; drawSide(); paintFx(); }));
       $$("[data-aud]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.aud] = !st[b.dataset.aud]; drawSide(); }));
       $$("[data-fd]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.fd] = +b.dataset.v; drawSide(); }));
       $$("[data-card]", side).forEach((b) => (b.onclick = () => { push(); const k = b.dataset.card; st[k] = st[k] ? null : { text: k === "intro" ? it.name : "Thanks for watching", sub: "", dur: 3 }; drawSide(); }));
@@ -760,7 +820,8 @@
         clips: st.clips.map((c) => ({ start: r2(c.start), end: r2(c.end), speed: c.speed })),
         overlays: st.ov.filter((o) => o.kind !== "sound").map((o) => ({ kind: o.kind, start: Math.max(0, shift(o.start)), end: Math.max(0.2, shift(o.end)), x: o.x, y: o.y, w: o.w || 0, h: o.h || 0, text: o.text || "", size: o.size || 0, color: o.color || "", level: o.level || 2, bg: o.bg !== false, shape: o.shape || "", fill: o.fill || 0, thick: o.thick || 0, flipx: !!o.flipx, flipy: !!o.flipy, style: o.style || "", color2: o.color2 || "", mode: o.mode || "", path: o.path || "", opacity: o.opacity || 0, anim: o.anim && o.anim !== "none" ? o.anim : "" })),
         sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.start)) + Math.max(0, o.end - o.start), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat, music: !!o.music, voice: !!o.voice })),
-        denoise: st.dn, duck: st.duck, fade_in: st.fi, fade_out: st.fo,
+        frame: st.fr.kind && (st.fr.kind !== "image" || st.fr.path) ? { kind: st.fr.kind, color: st.fr.color, color2: st.fr.color2, path: st.fr.path || "", pad: st.fr.pad, radius: st.fr.radius, shadow: st.fr.shadow } : null,
+        denoise: st.dn, mute_orig: st.muteOrig, cursor_fx: cursorFx(), duck: st.duck, fade_in: st.fi, fade_out: st.fo,
         intro: st.intro ? { text: st.intro.text, sub: st.intro.sub, dur: st.intro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
         outro: st.outro ? { text: st.outro.text, sub: st.outro.sub, dur: st.outro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
       };
@@ -863,14 +924,32 @@
     el.addEventListener("pointerdown", (ev) => { if (!ev.target.closest("#mb")) $$("#mb button.on", el).forEach((x) => x.classList.remove("on")); }, true);
 
     // ---------------------------------------------------------------- wiring
-    function paint() { $("#b-time", el).textContent = `${fmt(st.t)} / ${fmt(total())}`; paintHead(); paintOverlays(); }
+    // the glow and rings in the preview, following the recording's own clock
+    function paintFx() {
+      let box = $("#cfx", el); if (!box) { box = document.createElement("div"); box.id = "cfx"; box.className = "cfx"; frame.appendChild(box); }
+      if (!st.cur.length || (!st.cfx.rings && !st.cfx.halo)) { box.innerHTML = ""; return; }
+      const t = vid.currentTime; let lo = 0, hi = st.cur.length - 1;
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (st.cur[m][0] <= t) lo = m; else hi = m - 1; }
+      const p = st.cur[lo]; let h = "";
+      if (st.cfx.halo && p) h += `<i class="halo" style="left:${p[1] * 100}%;top:${p[2] * 100}%"></i>`;
+      if (st.cfx.rings) { let prev = 0; for (let i = Math.max(0, lo - 40); i <= lo; i++) { const q = st.cur[i]; if (q[3] && !prev) { const a = t - q[0]; if (a >= 0 && a < 0.45) { const u = a / 0.45; h += `<i class="ring" style="left:${q[1] * 100}%;top:${q[2] * 100}%;transform:translate(-50%,-50%) scale(${0.6 + u * 1.9});opacity:${1 - u}"></i>`; } } prev = q[3]; } }
+      box.innerHTML = h;
+    }
+    function cursorFx() {
+      if (!st.cur.length || (!st.cfx.rings && !st.cfx.halo)) return null;
+      const m = (t) => srcToTl(t);
+      const clicks = st.cfx.rings ? clicksSrc().map(([t, x, y]) => [m(t), x, y]).filter((c) => c[0] != null).map(([t, x, y]) => [+t.toFixed(3), x, y]) : [];
+      const path = []; if (st.cfx.halo) for (const p of st.cur) { const t = m(p[0]); if (t != null) path.push([+t.toFixed(3), p[1], p[2]]); }
+      return { rings: st.cfx.rings, halo: st.cfx.halo, ring_color: "#ff3b30", halo_color: "#ffd60a", clicks, path };
+    }
+    function paint() { $("#b-time", el).textContent = `${fmt(st.t)} / ${fmt(total())}`; paintHead(); paintOverlays(); paintFx(); }
     function draw() { $("#ed-title", el).textContent = it.name; $$("#ed-pre button", el).forEach((b) => b.classList.toggle("on", b.dataset.k === st.preset)); $("#b-play", el).innerHTML = I(st.playing ? "pause" : "play") + (st.playing ? "Pause" : "Play"); $("#b-undo", el).disabled = !hist.length; drawSide(); drawTl(); paint(); }
     $$("#ed-pre button", el).forEach((b) => (b.onclick = () => { st.preset = b.dataset.k; draw(); }));
     $("#ed-x", el).onclick = closeEditor; $("#ed-go", el).onclick = go;
     $("#b-play", el).onclick = () => setPlay(!st.playing);
     $("#b-split", el).onclick = split; $("#b-del", el).onclick = del; $("#b-undo", el).onclick = undo;
     $("#b-zoom", el).oninput = (e) => { st.zoom = +e.target.value; drawTl(); };
-    vid.addEventListener("loadedmetadata", () => { if (vid.videoWidth) { st.ar = vid.videoWidth / vid.videoHeight; frame.style.aspectRatio = st.ar; } paint(); });
+    vid.addEventListener("loadedmetadata", () => { if (vid.videoWidth) { st.ar = vid.videoWidth / vid.videoHeight; $("#canvas", el).style.aspectRatio = st.ar; frame.style.aspectRatio = st.ar; paintFrame(); } paint(); });
     vid.addEventListener("click", () => { if (st.selOv) { st.selOv = null; draw(); return; } setPlay(!st.playing); });
     const key = (e) => {
       if (!$("#editor")) return document.removeEventListener("keydown", key, true);

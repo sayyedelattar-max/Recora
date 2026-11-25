@@ -12,6 +12,9 @@ pub struct Report {
     pub wall: f64,
     pub notes: Vec<String>,
     pub markers: Vec<f64>,
+    /// mouse path and clicks: [seconds, x, y, buttons], x and y as shares of the recorded area
+    #[serde(skip)]
+    pub cursor: Vec<[f32; 4]>,
 }
 
 fn mux_segment(seg: &Seg, idx: usize, dir: &Path, notes: &mut Vec<String>) -> Result<PathBuf> {
@@ -86,5 +89,5 @@ pub fn finalize(segs: &[Seg], dir: &Path, out: &Path) -> Result<Report> {
     if duration < wall * 0.96 - 0.5 {
         notes.push(format!("The saved video is {duration:.0} s but {wall:.0} s were recorded. Please press Details and send the log so this can be fixed."));
     }
-    Ok(Report { path: out.to_string_lossy().into(), duration, wall, notes, markers: vec![] })
+    Ok(Report { path: out.to_string_lossy().into(), duration, wall, notes, markers: vec![], cursor: vec![] })
 }

@@ -32,7 +32,7 @@ fn sd(shape: &str, px: f64, py: f64, w: f64, h: f64) -> f64 {
             (((px / rx).powi(2) + (py / ry).powi(2)).sqrt() - 1.0) * rx.min(ry)
         }
         _ => {
-            let r = if shape == "round" { (w.min(h) * 0.2).max(2.0) } else { 0.0 };
+            let r = if let Some(k) = shape.strip_prefix("round:") { (h.min(w) * k.parse::<f64>().unwrap_or(0.05)).max(2.0) } else if shape == "round" { (w.min(h) * 0.2).max(2.0) } else { 0.0 };
             let (qx, qy) = (px.abs() - hx + r, py.abs() - hy + r);
             (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r
         }
@@ -122,6 +122,20 @@ pub fn spotlight(vw: u32, vh: u32, hx: f64, hy: f64, hw: f64, hh: f64, shape: &s
             let a = dim * clamp01(0.5 + d / feather);
             let i = ((y * w + x) * 4) as usize;
             buf[i + 3] = (a * 255.0).round() as u8;
+        }
+    }
+    encode(&buf, w, h)
+}
+
+/// A smooth diagonal gradient, used as a backdrop behind the video.
+pub fn gradient(w: u32, h: u32, a: [u8; 3], b: [u8; 3]) -> Result<Vec<u8>> {
+    let mut buf = vec![255u8; (w * h * 4) as usize];
+    let (wf, hf) = (w.max(1) as f64, h.max(1) as f64);
+    for y in 0..h {
+        for x in 0..w {
+            let t = ((x as f64 / wf) * 0.6 + (y as f64 / hf) * 0.4).clamp(0.0, 1.0);
+            let i = ((y * w + x) * 4) as usize;
+            for k in 0..3 { buf[i + k] = (a[k] as f64 + (b[k] as f64 - a[k] as f64) * t).round() as u8; }
         }
     }
     encode(&buf, w, h)

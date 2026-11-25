@@ -127,7 +127,7 @@ fn build_spec(s: &Settings) -> Result<CaptureSpec, String> {
         }
         _ => Source::Screen { monitor: s.monitor },
     };
-    Ok(CaptureSpec { source, fps: s.fps, quality: s.quality.clone(), cursor: s.show_cursor, zones: Vec::new(), blur_apps: Vec::new(), origin: (0, 0) })
+    Ok(CaptureSpec { source, fps: s.fps, quality: s.quality.clone(), cursor: s.show_cursor, zones: Vec::new(), blur_apps: Vec::new(), origin: (0, 0), size: (0, 0) })
 }
 
 /// The Tauri monitor that matches recorder monitor `idx` (matched by device name, then by position in the list).
@@ -153,6 +153,7 @@ fn add_zones(app: &AppHandle, s: &Settings, spec: &mut CaptureSpec) {
     };
     if let Some(m) = tauri_monitor(app, mon) {
         spec.origin = (m.position().x, m.position().y);
+        spec.size = (m.size().width, m.size().height);
     }
     recorder::blur::set_level(s.blur_level);
     if s.blur_apps_on {
@@ -361,7 +362,7 @@ fn do_stop(app: &AppHandle) -> R<()> {
         close_capsule(&app2);
         match result {
             Ok(rep) => {
-                library::write_markers(Path::new(&rep.path), &rep.markers);
+                library::write_meta(Path::new(&rep.path), &rep.markers, &rep.cursor);
                 let _ = app2.emit("rec:done", &rep);
             }
             Err(e) => {
@@ -701,6 +702,11 @@ async fn edit_analyze_quick(path: String) -> R<edit::Analysis> {
     tauri::async_runtime::spawn_blocking(move || edit::analyze_quick(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
 }
 #[tauri::command]
+fn edit_cursor(path: String) -> Vec<[f32; 4]> {
+    library::read_cursor(Path::new(&path))
+}
+
+#[tauri::command]
 fn edit_plan(analysis: edit::Analysis, dur: f64, level: Option<u8>) -> edit::Plan {
     edit::plan(&analysis, dur, level.unwrap_or(2))
 }
@@ -836,7 +842,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_wave, voice_start, voice_stop, voice_level, edit_analyze, edit_analyze_quick, edit_plan, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_wave, voice_start, voice_stop, voice_level, edit_analyze, edit_analyze_quick, edit_plan, edit_cursor, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())

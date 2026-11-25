@@ -34,11 +34,20 @@ pub fn sidecar(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-pub fn write_markers(path: &Path, markers: &[f64]) {
-    if markers.is_empty() {
+pub fn write_meta(path: &Path, markers: &[f64], cursor: &[[f32; 4]]) {
+    if markers.is_empty() && cursor.len() < 2 {
         return;
     }
-    let _ = std::fs::write(sidecar(path), serde_json::json!({ "markers": markers }).to_string());
+    let _ = std::fs::write(sidecar(path), serde_json::json!({ "markers": markers, "cursor": cursor }).to_string());
+}
+
+/// The mouse path saved with a recording: `[seconds, x, y, buttons]` with x and y as shares of the picture.
+pub fn read_cursor(path: &Path) -> Vec<[f32; 4]> {
+    std::fs::read_to_string(sidecar(path))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| serde_json::from_value(v.get("cursor").cloned()?).ok())
+        .unwrap_or_default()
 }
 
 fn read_markers(path: &Path) -> Vec<f64> {

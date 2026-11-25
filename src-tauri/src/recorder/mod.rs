@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod cursor;
 pub mod mock;
 pub mod blur;
 pub mod preview;
@@ -58,6 +59,8 @@ pub struct CaptureSpec {
     pub blur_apps: Vec<String>,
     /// top-left corner of the recorded monitor on the desktop (physical pixels)
     pub origin: (i32, i32),
+    /// size of the recorded monitor in physical pixels (0 when unknown)
+    pub size: (u32, u32),
 }
 
 /// `process` set: fractions of that app's window. Otherwise pixels of the recorded monitor.
@@ -186,6 +189,8 @@ pub struct Session {
     pub sys_muted: Arc<AtomicBool>,
     pub levels: audio::Levels,
     pub notes: Vec<String>,
+    cursor: Option<cursor::Tracker>,
+    cursor_log: Vec<[f32; 4]>,
 }
 
 impl Session {
@@ -202,6 +207,8 @@ impl Session {
             sys_muted: Arc::new(AtomicBool::new(false)),
             levels: audio::Levels::new(),
             notes: vec![],
+            cursor: None,
+            cursor_log: vec![],
         })
     }
 
@@ -226,6 +233,19 @@ impl Session {
                 self.levels.clone(),
             )
         });
+        if self.cursor.is_none() {
+            let (o, sz) = (self.spec.origin, self.spec.size);
+            let area: cursor::Area = match &self.spec.source {
+                Source::Screen { .. } if sz.0 > 0 => Box::new(move || Some((o.0, o.1, sz.0 as i32, sz.1 as i32))),
+                Source::Region(r) if sz.0 > 0 => {
+                    let (x, y, w, h) = (o.0 + r.x as i32, o.1 + r.y as i32, r.w as i32, r.h as i32);
+                    Box::new(move || Some((x, y, w, h)))
+                }
+                Source::Window { hwnd } => cursor::window_area(*hwnd),
+                _ => Box::new(|| None),
+            };
+            self.cursor = Some(cursor::Tracker::start(cursor::desktop_reader(), area));
+        }
         let cap = match start_capture(&self.spec, &video) {
             Ok(c) => c,
             Err(e) => {
@@ -259,6 +279,11 @@ impl Session {
         let wall = a.t_start.elapsed().as_secs_f64();
         let first_video = a.cap.first_frame();
         let cap_err = a.cap.last_error();
+        if let Some(t) = &self.cursor {
+            let base: f64 = self.segs.iter().map(|s| s.wall).sum();
+            let zero = first_video.unwrap_or(a.t_start);
+            self.cursor_log.extend(t.take(a.t_start, zero, base));
+        }
         let stats = a.cap.stop();
         crate::diag::log(&format!("segment ended: wall={wall:.1}s first_frame={} stats={:?} error={:?}", first_video.is_some(), stats.as_ref().map(|s| s.frames).ok(), cap_err));
         let ares = a.audio.map(|x| x.stop());
@@ -310,6 +335,7 @@ impl Session {
         let mut report = mux::finalize(&self.segs, &self.dir, out)?;
         report.notes.extend(self.notes.clone());
         report.markers = self.markers.clone();
+        report.cursor = std::mem::take(&mut self.cursor_log);
         let _ = std::fs::remove_dir_all(&self.dir);
         Ok(report)
     }
@@ -330,7 +356,7 @@ mod tests {
     use std::time::Duration;
 
     fn spec() -> CaptureSpec {
-        CaptureSpec { source: Source::Screen { monitor: 0 }, fps: 30, quality: "high".into(), cursor: true, zones: vec![], blur_apps: vec![], origin: (0, 0) }
+        CaptureSpec { source: Source::Screen { monitor: 0 }, fps: 30, quality: "high".into(), cursor: true, zones: vec![], blur_apps: vec![], origin: (0, 0), size: (0, 0) }
     }
 
     #[test]

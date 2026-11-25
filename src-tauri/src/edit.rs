@@ -128,6 +128,45 @@ fn yes() -> bool {
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
+pub struct Frame {
+    /// color | gradient | image | blur
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub color2: String,
+    #[serde(default)]
+    pub path: String,
+    /// margin around the picture, as a share of its width (0 to 0.2)
+    #[serde(default)]
+    pub pad: f64,
+    /// rounded corners, as a share of the picture's height (0 to 0.08)
+    #[serde(default)]
+    pub radius: f64,
+    #[serde(default)]
+    pub shadow: bool,
+}
+
+/// Click rings and a glow that follows the mouse, drawn on top of the picture.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct CursorFx {
+    #[serde(default)]
+    pub rings: bool,
+    #[serde(default)]
+    pub ring_color: String,
+    #[serde(default)]
+    pub halo: bool,
+    #[serde(default)]
+    pub halo_color: String,
+    /// [seconds on the edited timeline, x, y] with x and y as shares of the picture
+    #[serde(default)]
+    pub clicks: Vec<[f64; 3]>,
+    #[serde(default)]
+    pub path: Vec<[f64; 3]>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct Project {
     pub input: String,
     pub clips: Vec<Clip>,
@@ -146,6 +185,10 @@ pub struct Project {
     /// clean steady background noise from the recording's own sound
     #[serde(default)]
     pub denoise: bool,
+    #[serde(default)]
+    pub mute_orig: bool,
+    #[serde(default)]
+    pub cursor_fx: Option<CursorFx>,
     /// lower the music while the recording's own sound has speech
     #[serde(default)]
     pub duck: bool,
@@ -154,6 +197,9 @@ pub struct Project {
     pub fade_in: f64,
     #[serde(default)]
     pub fade_out: f64,
+    /// a backdrop behind the picture (colour, gradient, picture or a blurred copy of the video)
+    #[serde(default)]
+    pub frame: Option<Frame>,
     /// size of the source picture; filled in on export
     #[serde(default)]
     pub vw: u32,
@@ -222,6 +268,53 @@ pub(crate) fn font_file() -> Option<String> {
         "/System/Library/Fonts/Helvetica.ttc",
     ];
     cands.iter().find(|p| Path::new(p).exists()).map(|s| esc_path(s))
+}
+
+fn ass_time(t: f64) -> String {
+    let t = t.max(0.0);
+    let cs = (t * 100.0).round() as u64;
+    format!("{}:{:02}:{:02}.{:02}", cs / 360000, (cs / 6000) % 60, (cs / 100) % 60, cs % 100)
+}
+
+/// ASS colour (&HBBGGRR&) from "#rrggbb"
+fn ass_col(c: &str, fallback: &str) -> String {
+    let [r, g, b] = rgb(if c.is_empty() { fallback } else { c });
+    format!("&H{b:02X}{g:02X}{r:02X}&")
+}
+
+/// Click rings (a ring that grows and fades) and a soft glow that follows the mouse, as a subtitle file drawn by ffmpeg.
+fn cursor_ass(fx: &CursorFx, w: u32, h: u32, off: f64) -> Option<String> {
+    if (!fx.rings || fx.clicks.is_empty()) && (!fx.halo || fx.path.len() < 2) {
+        return None;
+    }
+    let mut s = format!("[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: D,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+    let r0 = (h.min(w) as f64 * 0.02).max(8.0); // ring radius at the start
+    // a circle drawn with four bezier curves around (0,0)
+    let k = 0.5523;
+    let ring = |r: f64| format!("m {r:.1} 0 b {r:.1} {a:.1} {a:.1} {r:.1} 0 {r:.1} b {na:.1} {r:.1} -{r:.1} {a:.1} -{r:.1} 0 b -{r:.1} {na:.1} {na:.1} -{r:.1} 0 -{r:.1} b {a:.1} -{r:.1} {r:.1} {na:.1} {r:.1} 0", a = r * k, na = -(r * k));
+    if fx.rings {
+        let col = ass_col(&fx.ring_color, "#ff3b30");
+        for c in fx.clicks.iter().take(4000) {
+            let (t, x, y) = (c[0] + off, c[1] * w as f64, c[2] * h as f64);
+            s += &format!("Dialogue: 2,{},{},D,,0,0,0,,{{\\pos({:.1},{:.1})\\bord{:.1}\\1a&HFF&\\3c{col}\\3a&H20&\\fscx60\\fscy60\\t(0,450,\\fscx260\\fscy260\\3a&HFF&\\bord{:.1})\\p1}}{}{{\\p0}}\n", ass_time(t), ass_time(t + 0.45), x, y, r0 * 0.5, r0 * 0.15, ring(r0));
+        }
+    }
+    if fx.halo && fx.path.len() > 1 {
+        let col = ass_col(&fx.halo_color, "#ffd60a");
+        let hr = (h.min(w) as f64 * 0.034).max(12.0);
+        let mut last = fx.path[0];
+        for p in fx.path.iter().skip(1).take(120_000) {
+            let dt = p[0] - last[0];
+            if dt < 0.04 && (p[1] - last[1]).abs() < 0.002 && (p[2] - last[2]).abs() < 0.002 {
+                continue;
+            }
+            let (a, b) = (last, *p);
+            let end = if dt > 0.5 { a[0] + 0.5 } else { b[0] };
+            s += &format!("Dialogue: 1,{},{},D,,0,0,0,,{{\\move({:.1},{:.1},{:.1},{:.1},0,{})\\bord0\\1c{col}\\1a&H88&\\blur6\\p1}}{}{{\\p0}}\n", ass_time(a[0] + off), ass_time(end + off), a[1] * w as f64, a[2] * h as f64, b[1] * w as f64, b[2] * h as f64, ((end - a[0]) * 1000.0).max(1.0) as u64, ring(hr));
+            last = b;
+        }
+    }
+    Some(s)
 }
 
 fn rgb(c: &str) -> [u8; 3] {
@@ -373,6 +466,10 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
         g.push(format!("[{cur_a}]highpass=f=70,afftdn=nr=14:nf=-28:tn=1[adn]"));
         cur_a = "adn".into();
     }
+    if has_audio && p.mute_orig {
+        g.push(format!("[{cur_a}]volume=0[amu]"));
+        cur_a = "amu".into();
+    }
     // overlays on the edited timeline
     let font = font_file();
     for (i, o) in p.overlays.iter().enumerate() {
@@ -471,6 +568,76 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
             _ => continue,
         }
         cur_v = next;
+    }
+    // click rings and a mouse glow
+    if let Some(fx) = p.cursor_fx.as_ref() {
+        if let Some(a) = cursor_ass(fx, vw, vh, off) {
+            let path = tmp.join("cursor.ass");
+            std::fs::write(&path, a)?;
+            let tf = esc_path(&path.to_string_lossy());
+            g.push(format!("[{cur_v}]ass=filename='{tf}'[cfx]"));
+            cur_v = "cfx".to_string();
+        }
+    }
+    // a backdrop behind the picture: the picture shrinks inside a margin, with rounded corners and a soft shadow
+    if let Some(fr) = p.frame.as_ref().filter(|x| !x.kind.is_empty() && x.pad > 0.0) {
+        let pad = fr.pad.clamp(0.01, 0.2);
+        let (fw, fh) = (((vw as f64 * (1.0 - 2.0 * pad)) / 2.0).round() as u32 * 2, ((vh as f64 * (1.0 - 2.0 * pad)) / 2.0).round() as u32 * 2);
+        let (fx, fy) = ((vw - fw) / 2, (vh - fh) / 2);
+        let tl = f(total_len + 0.5);
+        let bg = "fbg".to_string();
+        let src = |g: &mut Vec<String>, extra: &mut Vec<String>, n_in: &mut usize, png: &Path| {
+            let idx = *n_in;
+            *n_in += 1;
+            extra.extend(["-loop".into(), "1".into(), "-framerate".into(), f(rate), "-t".into(), tl.clone(), "-i".into(), esc_in(png)]);
+            g.push(format!("[{idx}:v]scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh},setsar=1,fps={},format=yuv420p[fbg]", f(rate)));
+        };
+        match fr.kind.as_str() {
+            "gradient" => {
+                let path = tmp.join("frame_bg.png");
+                let (c1, c2) = (if fr.color.is_empty() { "#1d2b64" } else { &fr.color }, if fr.color2.is_empty() { "#f8cdda" } else { &fr.color2 });
+                std::fs::write(&path, crate::shapes::gradient(vw.min(960), vh.min(540).max(2), rgb(c1), rgb(c2))?)?;
+                src(&mut g, &mut extra, &mut n_in, &path);
+            }
+            "image" if Path::new(&fr.path).exists() => src(&mut g, &mut extra, &mut n_in, Path::new(&fr.path)),
+            "blur" => {
+                g.push(format!("[{cur_v}]split[fa][fb]"));
+                g.push(format!("[fa]scale={}:{}:flags=bilinear,boxblur=14:3,scale={vw}:{vh},eq=brightness=-0.08:saturation=1.2,setsar=1[fbg]", vw / 8, vh / 8));
+                cur_v = "fb".to_string();
+            }
+            _ => {
+                let c = if fr.color.is_empty() { "#101828" } else { &fr.color };
+                g.push(format!("color=c={}:s={vw}x{vh}:r={}:d={tl},format=yuv420p[fbg]", colour(c), f(rate)));
+            }
+        }
+        let rad = fr.radius.clamp(0.0, 0.2);
+        let r = (rad * fh as f64).round() as u32;
+        let rs = format!("round:{rad}");
+        let shape = if r > 0 { rs.as_str() } else { "rect" };
+        g.push(format!("[{cur_v}]scale={fw}:{fh}:flags=lanczos,setsar=1,format=yuv420p[ffg0]"));
+        let mut fg = "ffg0".to_string();
+        if r > 0 {
+            let path = tmp.join("frame_mask.png");
+            std::fs::write(&path, crate::shapes::png(&crate::shapes::Spec { shape, w: fw, h: fh, rgb: [255; 3], fill: 1.0, outline: false, thick: 2.0, flipx: false, flipy: false, mask: true })?)?;
+            let idx = n_in;
+            n_in += 1;
+            extra.extend(["-loop".into(), "1".into(), "-framerate".into(), f(rate), "-t".into(), tl.clone(), "-i".into(), esc_in(&path)]);
+            g.push(format!("[{idx}:v]format=gray,split[fm1][fm2]"));
+            g.push(format!("[ffg0][fm1]alphamerge[ffg1]"));
+            fg = "ffg1".to_string();
+            if fr.shadow {
+                g.push(format!("[fm2]pad={}:{}:40:40:black,boxblur=22:2,format=gray[fsm]", fw + 80, fh + 80));
+                g.push(format!("color=c=black:s={}x{}:r={},format=yuv420p[fsb]", fw + 80, fh + 80, f(rate)));
+                g.push("[fsb][fsm]alphamerge,colorchannelmixer=aa=0.5[fsh]".to_string());
+                g.push(format!("[{bg}][fsh]overlay={}:{}:shortest=1[fbs]", fx as i64 - 40, fy as i64 - 40 + 14));
+                g.push(format!("[fbs][{fg}]overlay={fx}:{fy}:shortest=1,format=yuv420p[fout]"));
+                cur_v = "fout".to_string();
+            }
+        }
+        if cur_v != "fout" {
+            g.push(format!("[{bg}][{fg}]overlay={fx}:{fy}:shortest=1,format=yuv420p[fout]"));
+            cur_v = "fout".to_string();
+        }
     }
     // the preset decides the final size and container
     let (post, vcodec, ext): (String, Vec<&str>, &str) = match p.preset.as_str() {
@@ -935,6 +1102,51 @@ mod tests {
         export_to(&p, &out).unwrap();
         assert!(ffmpeg::has_audio(&out));
         assert!(ffmpeg::duration(&out).unwrap() > 1.0);
+    }
+
+    #[test]
+    fn draws_click_rings_and_a_mouse_glow() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("cursorfx");
+        let src = sample(&d);
+        let mut p = proj(src);
+        let path: Vec<[f64; 3]> = (0..60).map(|i| [i as f64 * 0.05, 0.2 + i as f64 * 0.01, 0.5]).collect();
+        p.cursor_fx = Some(CursorFx { rings: true, halo: true, clicks: vec![[1.0, 0.5, 0.5], [2.0, 0.3, 0.3]], path, ..Default::default() });
+        let out = d.join("fx.mp4");
+        export_to(&p, &out).unwrap();
+        assert!(ffmpeg::duration(&out).unwrap() > 1.0);
+        if let Some(k) = std::env::var_os("RECORA_KEEP") { let _ = std::fs::copy(&out, k); }
+    }
+
+    #[test]
+    fn can_silence_the_original_sound() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("mute");
+        let src = sample(&d);
+        let mut p = proj(src);
+        p.mute_orig = true;
+        let out = d.join("mute.mp4");
+        export_to(&p, &out).unwrap();
+        assert!(ffmpeg::duration(&out).unwrap() > 1.0);
+    }
+
+    #[test]
+    fn puts_the_picture_on_a_backdrop() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("frame");
+        let src = sample(&d);
+        for kind in ["color", "gradient", "blur"] {
+            let mut p = proj(src.clone());
+            p.frame = Some(Frame { kind: kind.into(), color: "#1d2b64".into(), color2: "#f8cdda".into(), pad: 0.06, radius: 0.03, shadow: true, ..Default::default() });
+            let out = d.join(format!("{kind}.mp4"));
+            export_to(&p, &out).unwrap_or_else(|e| panic!("{kind}: {e}"));
+            assert!(ffmpeg::duration(&out).unwrap() > 1.0, "{kind}");
+            assert_eq!(ffmpeg::size(&out), ffmpeg::size(Path::new(&src)), "{kind} keeps the size");
+        }
+        let mut p = proj(src);
+        p.frame = Some(Frame { kind: "color".into(), color: "#ff0000".into(), pad: 0.1, ..Default::default() });
+        let out = d.join("sq.mp4");
+        export_to(&p, &out).unwrap();
     }
 
     #[test]
