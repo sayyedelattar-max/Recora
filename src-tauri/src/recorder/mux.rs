@@ -20,42 +20,53 @@ pub struct Report {
 fn mux_segment(seg: &Seg, idx: usize, dir: &Path, notes: &mut Vec<String>) -> Result<PathBuf> {
     let vdur = ffmpeg::duration(&seg.video).unwrap_or(0.0);
     let target = seg.wall.max(0.2);
-    let gap = (target - vdur).max(0.0);
+    let lead = seg.lead.max(0.0);
+    let gap = (target - vdur - lead).max(0.0);
     let pad = gap > 0.5; // the picture stopped changing: hold the last frame for the missing time
     let audios: Vec<(&PathBuf, f64)> = [(seg.mic.as_ref(), seg.mic_offset), (seg.sys.as_ref(), seg.sys_offset)]
         .into_iter()
         .filter_map(|(p, o)| p.filter(|p| p.exists()).map(|p| (p, o)))
         .collect();
-    if audios.is_empty() && !pad {
+    if audios.is_empty() && !pad && lead <= 0.0 {
         return Ok(seg.video.clone());
     }
     let out = dir.join(format!("m{idx}.mp4"));
     let mut a: Vec<String> = vec!["-i".into(), seg.video.to_string_lossy().into()];
     let mut filters: Vec<String> = vec![];
     for (j, (p, off)) in audios.iter().enumerate() {
-        if *off > 0.02 {
-            a.extend(["-itsoffset".into(), format!("{off:.3}")]);
-        } else if *off < -0.02 {
+        if *off < -0.02 {
             a.extend(["-ss".into(), format!("{:.3}", -off)]);
         }
         a.extend(["-i".into(), p.to_string_lossy().into()]);
-        filters.push(format!("[{}:a]aresample=48000,apad[a{j}]", j + 1));
+        // adelay puts the sound at its real place; -itsoffset is ignored when sounds are mixed
+        let delay = if *off > 0.02 { format!(",adelay={}:all=1", (off * 1000.0).round() as u64) } else { String::new() };
+        filters.push(format!("[{}:a]aresample=48000{delay},apad[a{j}]", j + 1));
     }
     match audios.len() {
         0 => {}
         1 => filters.push("[a0]anull[aout]".into()),
         _ => filters.push("[a0][a1]amix=inputs=2:duration=longest:normalize=0[aout]".into()),
     }
+    if pad || lead > 0.0 {
+        let mut tp = String::from("tpad=");
+        if lead > 0.0 {
+            tp += &format!("start_mode=clone:start_duration={lead:.3}");
+        }
+        if pad {
+            if lead > 0.0 { tp += ":"; }
+            tp += &format!("stop_mode=clone:stop_duration={gap:.3}");
+        }
+        filters.push(format!("[0:v]{tp}[v]"));
+    }
     if pad {
-        filters.push(format!("[0:v]tpad=stop_mode=clone:stop_duration={gap:.3}[v]"));
         notes.push(format!("The screen was still for the last {gap:.1} s, so the final picture was held to keep the right length."));
     }
     a.extend(["-filter_complex".into(), filters.join(";")]);
-    a.extend(["-map".into(), if pad { "[v]".into() } else { "0:v".into() }]);
+    a.extend(["-map".into(), if pad || lead > 0.0 { "[v]".into() } else { "0:v".into() }]);
     if !audios.is_empty() {
         a.extend(["-map".into(), "[aout]".into(), "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
     }
-    if pad {
+    if pad || lead > 0.0 {
         a.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"].map(String::from));
     } else {
         a.extend(["-c:v".into(), "copy".into()]);

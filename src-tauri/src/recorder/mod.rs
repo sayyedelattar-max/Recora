@@ -167,6 +167,8 @@ pub struct Seg {
     pub sys: Option<PathBuf>,
     pub mic_offset: f64, // seconds the audio starts after the video (negative: before)
     pub sys_offset: f64,
+    /// seconds the first picture arrived after the recording began (a still screen sends nothing at first); the first frame is held for this long
+    pub lead: f64,
     pub wall: f64,
     pub frames: u64,
 }
@@ -281,21 +283,25 @@ impl Session {
         let cap_err = a.cap.last_error();
         if let Some(t) = &self.cursor {
             let base: f64 = self.segs.iter().map(|s| s.wall).sum();
-            let zero = first_video.unwrap_or(a.t_start);
+            let lead0 = first_video.map(|v| v.duration_since(a.t_start).as_secs_f64()).unwrap_or(0.0);
+            let zero = if lead0 > 0.3 { a.t_start } else { first_video.unwrap_or(a.t_start) };
             self.cursor_log.extend(t.take(a.t_start, zero, base));
         }
         let stats = a.cap.stop();
         crate::diag::log(&format!("segment ended: wall={wall:.1}s first_frame={} stats={:?} error={:?}", first_video.is_some(), stats.as_ref().map(|s| s.frames).ok(), cap_err));
         let ares = a.audio.map(|x| x.stop());
         let stats = stats?;
+        // a still screen sends no picture at first: keep the wall clock by holding the first frame, and place sound against the real start
+        let lead = first_video.map(|v| v.duration_since(a.t_start).as_secs_f64()).unwrap_or(0.0);
+        let lead = if lead > 0.3 { lead } else { 0.0 };
+        let base_t = if lead > 0.0 { a.t_start } else { first_video.unwrap_or(a.t_start) };
         let off = |w: &Option<audio::WriterOut>| -> f64 {
-            match (w.as_ref().and_then(|w| w.first_at), first_video) {
-                (Some(at), Some(v)) => at.duration_since(v).as_secs_f64() * if at >= v { 1.0 } else { -1.0 },
-                (Some(at), None) => at.duration_since(a.t_start).as_secs_f64(),
-                _ => 0.0,
+            match w.as_ref().and_then(|w| w.first_at) {
+                Some(at) => at.duration_since(base_t).as_secs_f64() * if at >= base_t { 1.0 } else { -1.0 },
+                None => 0.0,
             }
         };
-        let mut seg = Seg { video: a.video, mic: None, sys: None, mic_offset: 0.0, sys_offset: 0.0, wall, frames: stats.frames };
+        let mut seg = Seg { video: a.video, mic: None, sys: None, mic_offset: 0.0, sys_offset: 0.0, lead, wall, frames: stats.frames };
         if let Some(r) = ares {
             for e in r.errors {
                 let msg = if e.starts_with("mic") {
@@ -309,6 +315,10 @@ impl Session {
             }
             seg.mic_offset = off(&r.mic);
             seg.sys_offset = off(&r.sys);
+            crate::diag::log(&format!("timing: first picture {lead:.2}s after start, mic starts at {:.2}s (has={}), system sound starts at {:.2}s (has={})", seg.mic_offset, r.mic.is_some(), seg.sys_offset, r.sys.is_some()));
+            if r.mic.is_some() && seg.mic_offset > 1.5 {
+                self.notes.push(format!("The microphone began delivering sound {:.0} s after the recording started, so the first seconds have no voice. Check the microphone in Windows sound settings.", seg.mic_offset));
+            }
             seg.mic = r.mic.map(|w| w.path);
             seg.sys = r.sys.map(|w| w.path);
         }
@@ -389,7 +399,7 @@ mod tests {
         ffmpeg::run(&["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=5", "-c:v", "libx264", "-pix_fmt", "yuv420p", dir.join("v.mp4").to_str().unwrap()]).unwrap();
         ffmpeg::run(&["-f", "lavfi", "-i", "sine=frequency=440:duration=2", dir.join("mic.wav").to_str().unwrap()]).unwrap();
         ffmpeg::run(&["-f", "lavfi", "-i", "sine=frequency=660:duration=1", dir.join("sys.wav").to_str().unwrap()]).unwrap();
-        let seg = Seg { video: dir.join("v.mp4"), mic: Some(dir.join("mic.wav")), sys: Some(dir.join("sys.wav")), mic_offset: 1.0, sys_offset: -0.0, wall: 5.0, frames: 150 };
+        let seg = Seg { video: dir.join("v.mp4"), mic: Some(dir.join("mic.wav")), sys: Some(dir.join("sys.wav")), mic_offset: 1.0, sys_offset: -0.0, lead: 0.0, wall: 5.0, frames: 150 };
         let out = dir.join("final.mp4");
         let rep = mux::finalize(&[seg], &dir, &out).unwrap();
         assert!(ffmpeg::has_audio(&out));
@@ -403,9 +413,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         ffmpeg::run(&["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", dir.join("v.mp4").to_str().unwrap()]).unwrap();
-        let seg = Seg { video: dir.join("v.mp4"), mic: None, sys: None, mic_offset: 0.0, sys_offset: 0.0, wall: 6.0, frames: 90 };
+        let seg = Seg { video: dir.join("v.mp4"), mic: None, sys: None, mic_offset: 0.0, sys_offset: 0.0, lead: 0.0, wall: 6.0, frames: 90 };
         let rep = mux::finalize(&[seg], &dir, &dir.join("final.mp4")).unwrap();
         assert!((rep.duration - 6.0).abs() < 0.3, "duration {}", rep.duration);
         assert!(rep.notes.iter().any(|n| n.contains("held")));
+    }
+
+    fn mean_db(f: &std::path::Path, from: f64, len: f64) -> f64 {
+        let o = std::process::Command::new(crate::ffmpeg::bin()).args(["-hide_banner", "-ss", &from.to_string(), "-t", &len.to_string(), "-i", f.to_str().unwrap(), "-vn", "-af", "volumedetect", "-f", "null", "-"]).output().unwrap();
+        let t = String::from_utf8_lossy(&o.stderr).to_string();
+        t.lines().find_map(|l| l.split("mean_volume:").nth(1).and_then(|v| v.trim().trim_end_matches(" dB").parse::<f64>().ok())).unwrap_or(-91.0)
+    }
+
+    #[test]
+    fn sound_lands_at_its_real_time_even_when_mixed() {
+        let dir = std::env::temp_dir().join("recora_t4");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ffmpeg::run(&["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", dir.join("v.mp4").to_str().unwrap()]).unwrap();
+        ffmpeg::run(&["-f", "lavfi", "-i", "sine=frequency=440:duration=6", dir.join("mic.wav").to_str().unwrap()]).unwrap();
+        ffmpeg::run(&["-f", "lavfi", "-i", "sine=frequency=880:duration=1.5", dir.join("sys.wav").to_str().unwrap()]).unwrap();
+        // the system sound begins 4 s in; it must not leak into the first seconds
+        let seg = Seg { video: dir.join("v.mp4"), mic: Some(dir.join("mic.wav")), sys: Some(dir.join("sys.wav")), mic_offset: 0.0, sys_offset: 4.0, lead: 0.0, wall: 6.0, frames: 180 };
+        let out = dir.join("final.mp4");
+        mux::finalize(&[seg], &dir, &out).unwrap();
+        let early = mean_db(&out, 0.5, 1.5);
+        let late = mean_db(&out, 4.2, 1.0);
+        assert!(late > early + 1.5, "early {early} dB, late {late} dB: the second sound must start at 4 s");
+    }
+
+    #[test]
+    fn a_late_first_picture_keeps_the_voice_from_the_start() {
+        // a still screen sent its first picture 2 s late; the voice from those 2 s must not be cut away
+        let dir = std::env::temp_dir().join("recora_t5");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ffmpeg::run(&["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", dir.join("v.mp4").to_str().unwrap()]).unwrap();
+        ffmpeg::run(&["-f", "lavfi", "-i", "sine=frequency=440:duration=6", dir.join("mic.wav").to_str().unwrap()]).unwrap();
+        let seg = Seg { video: dir.join("v.mp4"), mic: Some(dir.join("mic.wav")), sys: None, mic_offset: 0.0, sys_offset: 0.0, lead: 2.0, wall: 6.0, frames: 120 };
+        let out = dir.join("final.mp4");
+        let rep = mux::finalize(&[seg], &dir, &out).unwrap();
+        assert!((rep.duration - 6.0).abs() < 0.3, "duration {}", rep.duration);
+        assert!(mean_db(&out, 0.2, 1.0) > -40.0, "the first second must have the voice");
     }
 }
