@@ -36,7 +36,8 @@ pub struct Model {
 pub const MODELS: &[Model] = &[
     Model { id: "fast", file: "ggml-base-q5_1.bin", label: "Fast", note: "Small and quick. Good for clear English; weaker for Arabic.", mb: 60, min_bytes: 40_000_000 },
     Model { id: "balanced", file: "ggml-small-q5_1.bin", label: "Balanced", note: "A good middle: decent Arabic on most computers.", mb: 190, min_bytes: 120_000_000 },
-    Model { id: "best", file: "ggml-large-v3-turbo-q5_0.bin", label: "Best (recommended for Arabic)", note: "The most accurate. Slower, and needs about 2 GB of memory.", mb: 580, min_bytes: 400_000_000 },
+    Model { id: "best", file: "ggml-large-v3-turbo-q5_0.bin", label: "Best", note: "Very accurate and reasonably quick. Needs about 2 GB of memory.", mb: 580, min_bytes: 400_000_000 },
+    Model { id: "max", file: "ggml-large-v3-q5_0.bin", label: "Maximum (recommended for Arabic)", note: "The most accurate for Arabic and mixed Arabic/English. About 3 times slower than Best; needs about 3 GB of memory.", mb: 1080, min_bytes: 900_000_000 },
 ];
 
 fn model(id: &str) -> &'static Model {
@@ -74,12 +75,16 @@ pub struct ModelInfo {
 #[derive(Serialize)]
 pub struct Status {
     pub engine: bool,
+    pub dir: String,
+    pub custom: bool,
     pub models: Vec<ModelInfo>,
 }
 
 pub fn status(dir: &Path) -> Status {
     Status {
         engine: engine().is_some(),
+        dir: dir.to_string_lossy().to_string(),
+        custom: false,
         models: MODELS.iter().map(|m| ModelInfo { id: m.id, label: m.label, note: m.note, mb: m.mb, have: dir.join(m.file).metadata().map(|x| x.len() >= m.min_bytes).unwrap_or(false) }).collect(),
     }
 }
@@ -188,13 +193,19 @@ pub fn transcribe(src: &Path, model_file: &Path, lang: &str, progress: &dyn Fn(u
     let tmp = std::env::temp_dir().join(format!("recora_cap_{}", std::process::id()));
     std::fs::create_dir_all(&tmp)?;
     let wav = tmp.join("speech.wav");
-    // 16 kHz mono, with a gentle clean-up so background hiss is not mistaken for words
-    ffmpeg::run(&[std::ffi::OsString::from("-i"), src.into(), "-vn".into(), "-ac".into(), "1".into(), "-ar".into(), "16000".into(), "-af".into(), "highpass=f=70,afftdn=nr=10:nf=-30".into(), "-c:a".into(), "pcm_s16le".into(), wav.clone().into()])
+    // 16 kHz mono; only the speech band is kept and quiet speech is levelled up. No noise remover: it damages speech more than it helps.
+    ffmpeg::run(&[std::ffi::OsString::from("-i"), src.into(), "-vn".into(), "-ac".into(), "1".into(), "-ar".into(), "16000".into(), "-af".into(), "highpass=f=80,lowpass=f=7600,dynaudnorm=f=150:g=15".into(), "-c:a".into(), "pcm_s16le".into(), wav.clone().into()])
         .map_err(|_| anyhow!("This recording has no sound to turn into captions."))?;
     let base = tmp.join("out");
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(1).clamp(2, 8);
     let mut c = Command::new(&exe);
-    c.arg("-m").arg(model_file).arg("-f").arg(&wav).arg("-l").arg(lang).args(["-ml", "1", "-sow", "-oj", "-pp", "-nth", "0.6", "-t"]).arg(threads.to_string()).arg("-of").arg(&base);
+    c.arg("-m").arg(model_file).arg("-f").arg(&wav).arg("-l").arg(lang).args(["-ml", "1", "-sow", "-oj", "-pp", "-nth", "0.6", "-sns", "-t"]).arg(threads.to_string()).arg("-of").arg(&base);
+    // a short hint in the language helps punctuation and mixed-in English terms
+    match lang {
+        "ar" => { c.arg("--prompt").arg("مرحباً بكم، في هذا الفيديو نشرح خطوة بخطوة، مع بعض المصطلحات التقنية مثل Windows وGitHub."); }
+        "en" => { c.arg("--prompt").arg("Hello, and welcome. In this video we go through it step by step."); }
+        _ => {}
+    }
     if let Some(d) = exe.parent() {
         c.current_dir(d);
     }

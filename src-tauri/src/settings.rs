@@ -65,6 +65,8 @@ pub struct Settings {
     pub ai_models: std::collections::BTreeMap<String, String>,
     /// address of a custom provider (for example a model running on this computer)
     pub ai_base: String,
+    /// where speech models for captions are kept; empty means the app's own folder
+    pub models_dir: String,
     pub labels_left: u32, // recordings left in which the recording pill shows all labels
 }
 
@@ -102,6 +104,7 @@ impl Default for Settings {
             ai_keys: Default::default(),
             ai_models: Default::default(),
             ai_base: String::new(),
+            models_dir: String::new(),
             labels_left: 3,
         }
     }

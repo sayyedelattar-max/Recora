@@ -747,16 +747,19 @@
     }
     function capCard() {
       const c = st.cap;
-      if (!c.status && !c.busy) { invoke("cap_status").then((x) => { c.status = x; if (!c.model) c.model = (x.models.find((m) => m.have) || x.models[2] || x.models[0]).id; if (st.tab === "cap") drawSide(); }).catch((e) => { c.status = { engine: false, models: [] }; c.err = String(e); }); return `<div class="label sm">Captions</div><div class="card"><p class="ai-note" style="margin:0">Checking…</p></div>`; }
+      if (!c.status && !c.busy) { invoke("cap_status").then((x) => { c.status = x; if (!c.model) c.model = (x.models.find((m) => m.have && m.id === "max") || x.models.find((m) => m.have) || x.models.find((m) => m.id === "max") || x.models[0]).id; if (st.tab === "cap") drawSide(); }).catch((e) => { c.status = { engine: false, models: [] }; c.err = String(e); }); return `<div class="label sm">Captions</div><div class="card"><p class="ai-note" style="margin:0">Checking…</p></div>`; }
       if (c.busy) { const dl = c.busy === "dl"; return `<div class="label sm">Captions</div><div class="card"><p class="ai-note" style="margin:0 0 8px" id="cap-msg">${dl ? "Downloading the speech model. This happens once." : "Listening to the recording. You can keep editing meanwhile."}</p><div class="pbar"><i id="cap-bar" style="width:${c.prog}%"></i></div><div class="row2"><span class="muted" id="cap-pct">${c.prog}%</span><button class="btn sm" id="cap-cancel">Cancel</button></div></div>`; }
       if (!c.status.engine) return `<div class="label sm">Captions</div><div class="card"><p class="ai-note" style="margin:0">The speech engine is not part of this copy of Recora, so captions can't be made here.</p></div>`;
       const err = c.err ? `<p class="ai-note" style="margin:8px 0 0;color:var(--danger,#ff3b30)">${esc(c.err)}</p>` : "";
       const m = c.status.models.find((x) => x.id === c.model) || c.status.models[0];
       if (!c.words.length) {
         const mods = c.status.models.map((x) => `<button class="mdl${x.id === c.model ? " on" : ""}" data-mdl="${x.id}"><b>${esc(x.label)}</b><span>${esc(x.note)}</span><em>${x.have ? "Ready" : x.mb + " MB"}</em></button>`).join("");
+        const sd = (p) => (p.length > 38 ? p.slice(0, 14) + "…" + p.slice(-22) : p);
+        if (c.ask) return `<div class="label sm">Where to keep the model</div><div class="card"><p class="ai-note" style="margin:0 0 8px">The model is ${m.mb} MB and is downloaded once. If you keep it in a folder of your own (for example on another drive), a new install or a new computer can use it without downloading it again.</p><button class="btn primary" id="ask-pick" style="width:100%">Choose a folder…</button><button class="btn" id="ask-def" style="width:100%;margin-top:6px">Use the default place</button><p class="ai-note" style="margin:8px 0 0" dir="ltr">Default: ${esc(sd(c.status.dir))}</p></div>`;
+        const folder = `<div class="row2" style="margin-top:10px"><span class="muted" dir="ltr" title="${esc(c.status.dir)}">${esc(sd(c.status.dir))}</span><span><button class="btn sm" id="mdir-pick">Change…</button> <button class="btn sm" id="mdir-open">Open</button></span></div><p class="ai-note" style="margin:4px 0 0">Models are kept here. Point to a folder that already has them and they are used as they are.</p>`;
         return `<div class="label sm">Captions from your voice</div><div class="card"><p class="ai-note" style="margin:0 0 8px">Works on this computer. Nothing is uploaded.</p><div class="mdls">${mods}</div>
           <div class="row2"><span>Language</span><div class="seg fit" id="cap-lang">${CAP_LANGS.map(([k, n]) => `<button data-l="${k}" class="${c.lang === k ? "on" : ""}">${n}</button>`).join("")}</div></div>
-          <button class="btn primary" id="cap-go" style="width:100%;margin-top:8px">${m && m.have ? "Create captions" : "Download and create captions"}</button>${err}</div>`;
+          <button class="btn primary" id="cap-go" style="width:100%;margin-top:8px">${m && m.have ? "Create captions" : "Download and create captions"}</button>${err}${folder}</div>`;
       }
       const lines = capTl(), n = c.words.length;
       const sel = c.sel ? [Math.min(c.sel[0], c.sel[1]), Math.max(c.sel[0], c.sel[1])] : null;
@@ -780,7 +783,17 @@
       seg("#cap-st", "style"); seg("#cap-ps", "pos"); seg("#cap-sz", "size", true);
       const on = q("#cap-on"); if (on) on.onclick = () => { c.on = !c.on; drawSide(); drawTl(); paint(); };
       const cn = q("#cap-cancel"); if (cn) cn.onclick = () => invoke("cap_cancel").catch(() => {});
-      const go = q("#cap-go"); if (go) go.onclick = async () => {
+      const pickDir = async () => { try { const d = await R.T.dialog.open({ directory: true, defaultPath: c.status.dir }); if (d) { c.status = await invoke("cap_set_dir", { path: d }); try { localStorage.setItem("recora.mdir.asked", "1"); } catch (e) {} return true; } } catch (e) { c.err = String(e); } return false; };
+      const mp = q("#mdir-pick"); if (mp) mp.onclick = async () => { await pickDir(); drawSide(); };
+      const mo = q("#mdir-open"); if (mo) mo.onclick = async () => { try { invoke("open_file", { path: await invoke("cap_dir") }); } catch (e) { toast(e, true); } };
+      const ap = q("#ask-pick"); if (ap) ap.onclick = async () => { if (await pickDir()) { c.ask = false; startCaps(); } };
+      const ad = q("#ask-def"); if (ad) ad.onclick = () => { try { localStorage.setItem("recora.mdir.asked", "1"); } catch (e) {} c.ask = false; startCaps(); };
+      const go = q("#cap-go"); if (go) go.onclick = () => {
+        const m = c.status.models.find((x) => x.id === c.model); let asked = false; try { asked = !!localStorage.getItem("recora.mdir.asked"); } catch (e) {}
+        if (!m.have && !c.status.custom && !asked) { c.ask = true; drawSide(); return; }
+        startCaps();
+      };
+      const startCaps = async () => {
         c.err = ""; const m = c.status.models.find((x) => x.id === c.model);
         try {
           if (!m.have) { c.busy = "dl"; c.prog = 0; drawSide(); await invoke("cap_download", { id: c.model }); m.have = true; }

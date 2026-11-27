@@ -702,13 +702,47 @@ async fn edit_analyze(path: String) -> R<edit::Analysis> {
 async fn edit_analyze_quick(path: String) -> R<edit::Analysis> {
     tauri::async_runtime::spawn_blocking(move || edit::analyze_quick(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
 }
-#[tauri::command]
-fn cap_status(state: State<AppState>) -> captions::Status {
-    captions::status(&state.settings_path.parent().map(|p| p.join("models")).unwrap_or_default())
+fn default_models_dir(state: &State<AppState>) -> PathBuf {
+    state.settings_path.parent().map(|p| p.join("models")).unwrap_or_default()
 }
 
+/// The folder holding the speech models: the one the person chose, or the app's own.
 fn models_dir(state: &State<AppState>) -> PathBuf {
-    state.settings_path.parent().map(|p| p.join("models")).unwrap_or_default()
+    let c = state.settings.lock().models_dir.clone();
+    if c.trim().is_empty() { default_models_dir(state) } else { PathBuf::from(c) }
+}
+
+#[tauri::command]
+fn cap_status(state: State<AppState>) -> captions::Status {
+    let mut s = captions::status(&models_dir(&state));
+    s.custom = !state.settings.lock().models_dir.trim().is_empty();
+    s
+}
+
+/// Chooses where models are kept ("" returns to the default). Models already in that folder are found at once.
+#[tauri::command]
+fn cap_set_dir(state: State<AppState>, path: String) -> R<captions::Status> {
+    let path = path.trim().to_string();
+    if !path.is_empty() {
+        std::fs::create_dir_all(&path).map_err(|e| format!("Could not use that folder: {e}"))?;
+        let probe = Path::new(&path).join(".recora_write_test");
+        std::fs::write(&probe, b"x").map_err(|_| "That folder is not writable. Choose another one.".to_string())?;
+        let _ = std::fs::remove_file(probe);
+    }
+    {
+        let mut st = state.settings.lock();
+        st.models_dir = path;
+        st.save(&state.settings_path);
+    }
+    Ok(cap_status(state))
+}
+
+/// Makes sure the models folder exists so it can be opened.
+#[tauri::command]
+fn cap_dir(state: State<AppState>) -> String {
+    let d = models_dir(&state);
+    let _ = std::fs::create_dir_all(&d);
+    d.to_string_lossy().to_string()
 }
 
 #[tauri::command]
@@ -919,7 +953,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_wave, voice_start, voice_stop, voice_level, edit_analyze, edit_analyze_quick, edit_plan, edit_cursor, cap_status, cap_download, cap_cancel, cap_run, cap_words, cap_save, edit_probe, ai_edit, ai_test, ai_models, ai_estimate, open_url, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_wave, voice_start, voice_stop, voice_level, edit_analyze, edit_analyze_quick, edit_plan, edit_cursor, cap_status, cap_set_dir, cap_dir, cap_download, cap_cancel, cap_run, cap_words, cap_save, edit_probe, ai_edit, ai_test, ai_models, ai_estimate, open_url, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())
