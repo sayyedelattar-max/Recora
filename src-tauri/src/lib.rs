@@ -1,4 +1,5 @@
 mod apps;
+mod captions;
 mod shapes;
 mod diag;
 mod ai;
@@ -702,6 +703,61 @@ async fn edit_analyze_quick(path: String) -> R<edit::Analysis> {
     tauri::async_runtime::spawn_blocking(move || edit::analyze_quick(Path::new(&path)).map_err(e2s)).await.map_err(e2s)?
 }
 #[tauri::command]
+fn cap_status(state: State<AppState>) -> captions::Status {
+    captions::status(&state.settings_path.parent().map(|p| p.join("models")).unwrap_or_default())
+}
+
+fn models_dir(state: &State<AppState>) -> PathBuf {
+    state.settings_path.parent().map(|p| p.join("models")).unwrap_or_default()
+}
+
+#[tauri::command]
+async fn cap_download(app: AppHandle, state: State<'_, AppState>, id: String) -> R<()> {
+    let dir = models_dir(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let a = app.clone();
+        let idc = id.clone();
+        captions::download(&dir, &id, None, &move |done, total| {
+            let _ = a.emit("cap:dl", serde_json::json!({ "id": idc, "done": done, "total": total }));
+        })
+        .map_err(e2s)
+    })
+    .await
+    .map_err(e2s)?
+}
+
+#[tauri::command]
+fn cap_cancel() {
+    captions::CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[tauri::command]
+async fn cap_run(app: AppHandle, state: State<'_, AppState>, path: String, model: String, lang: String) -> R<Vec<captions::Word>> {
+    let mp = captions::model_path(&models_dir(&state), &model);
+    tauri::async_runtime::spawn_blocking(move || {
+        let a = app.clone();
+        let words = captions::transcribe(Path::new(&path), &mp, &lang, &move |p| {
+            let _ = a.emit("cap:prog", p);
+        })
+        .map_err(e2s)?;
+        library::write_words(Path::new(&path), &words, &lang, &model);
+        Ok(words)
+    })
+    .await
+    .map_err(e2s)?
+}
+
+#[tauri::command]
+fn cap_words(path: String) -> Option<serde_json::Value> {
+    library::read_words(Path::new(&path))
+}
+
+#[tauri::command]
+fn cap_save(path: String, words: Vec<captions::Word>, lang: String, model: String) {
+    library::write_words(Path::new(&path), &words, &lang, &model);
+}
+
+#[tauri::command]
 fn edit_cursor(path: String) -> Vec<[f32; 4]> {
     library::read_cursor(Path::new(&path))
 }
@@ -724,6 +780,20 @@ async fn ai_edit(state: State<'_, AppState>, instruction: String, facts: ai::Fac
         (p, k, m, s.ai_base.clone())
     };
     tauri::async_runtime::spawn_blocking(move || ai::edit(&ai::Cfg { provider: &p, key: &k, model: &m, base: &b }, &instruction, &facts).map_err(e2s)).await.map_err(e2s)?
+}
+#[derive(serde::Serialize)]
+struct ModelList {
+    models: Vec<String>,
+    pick: Option<String>,
+}
+#[tauri::command]
+async fn ai_models(provider: String, key: String, base: Option<String>) -> R<ModelList> {
+    let base = base.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        ai::list_models(&ai::Cfg { provider: &provider, key: &key, model: "", base: &base }).map(|(models, pick)| ModelList { models, pick }).map_err(e2s)
+    })
+    .await
+    .map_err(e2s)?
 }
 #[tauri::command]
 async fn ai_test(provider: String, key: String, model: String, base: Option<String>) -> R<()> {
@@ -849,7 +919,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings, set_settings, get_phase, get_sources, source_preview, island_size, pick_zone, zone_done, list_apps, launch_app, preflight, start_recording, stop_recording, cancel_recording, toggle_pause, toggle_mute,
-            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_wave, voice_start, voice_stop, voice_level, edit_analyze, edit_analyze_quick, edit_plan, edit_cursor, edit_probe, ai_edit, ai_test, ai_estimate, open_url, reveal,
+            add_marker, pick_region, region_done, region_cancel, lib_list, lib_rename, lib_delete, lib_trim, lib_export, edit_export, edit_strip, edit_wave, voice_start, voice_stop, voice_level, edit_analyze, edit_analyze_quick, edit_plan, edit_cursor, cap_status, cap_download, cap_cancel, cap_run, cap_words, cap_save, edit_probe, ai_edit, ai_test, ai_models, ai_estimate, open_url, reveal,
             open_file, open_folder
         ])
         .run(tauri::generate_context!())

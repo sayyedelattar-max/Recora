@@ -34,11 +34,33 @@ pub fn sidecar(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+fn load_sidecar(path: &Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_to_string(sidecar(path)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default()
+}
+
+fn save_sidecar(path: &Path, m: serde_json::Map<String, serde_json::Value>) {
+    let _ = std::fs::write(sidecar(path), serde_json::Value::Object(m).to_string());
+}
+
 pub fn write_meta(path: &Path, markers: &[f64], cursor: &[[f32; 4]]) {
     if markers.is_empty() && cursor.len() < 2 {
         return;
     }
-    let _ = std::fs::write(sidecar(path), serde_json::json!({ "markers": markers, "cursor": cursor }).to_string());
+    let mut m = load_sidecar(path);
+    m.insert("markers".into(), serde_json::json!(markers));
+    m.insert("cursor".into(), serde_json::json!(cursor));
+    save_sidecar(path, m);
+}
+
+/// Captions are kept with the recording so they are not worked out twice.
+pub fn write_words(path: &Path, words: &[crate::captions::Word], lang: &str, model: &str) {
+    let mut m = load_sidecar(path);
+    m.insert("words".into(), serde_json::json!({ "lang": lang, "model": model, "w": words }));
+    save_sidecar(path, m);
+}
+
+pub fn read_words(path: &Path) -> Option<serde_json::Value> {
+    load_sidecar(path).get("words").cloned()
 }
 
 /// The mouse path saved with a recording: `[seconds, x, y, buttons]` with x and y as shares of the picture.

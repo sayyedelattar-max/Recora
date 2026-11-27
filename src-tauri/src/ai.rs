@@ -144,13 +144,27 @@ pub const PROVIDERS: &[Prov] = &[
     Prov { id: "openai", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini", json_mode: true },
     Prov { id: "gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash", json_mode: false },
     Prov { id: "openrouter", url: "https://openrouter.ai/api/v1/chat/completions", model: "openai/gpt-4o-mini", json_mode: false },
-    Prov { id: "deepseek", url: "https://api.deepseek.com/chat/completions", model: "deepseek-chat", json_mode: true },
+    Prov { id: "deepseek", url: "https://api.deepseek.com/chat/completions", model: "deepseek-flash", json_mode: true },
     Prov { id: "mistral", url: "https://api.mistral.ai/v1/chat/completions", model: "mistral-small-latest", json_mode: true },
     Prov { id: "groq", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", json_mode: true },
     Prov { id: "xai", url: "https://api.x.ai/v1/chat/completions", model: "grok-3-mini", json_mode: false },
     // any service that speaks the same chat format, including a model running on this computer (Ollama, LM Studio)
     Prov { id: "custom", url: "", model: "", json_mode: false },
 ];
+
+fn label(id: &str) -> &'static str {
+    match id {
+        "anthropic" => "Claude",
+        "openai" => "OpenAI",
+        "gemini" => "Google Gemini",
+        "openrouter" => "OpenRouter",
+        "deepseek" => "DeepSeek",
+        "mistral" => "Mistral",
+        "groq" => "Groq",
+        "xai" => "xAI",
+        _ => "The service",
+    }
+}
 
 fn prov(id: &str) -> &'static Prov {
     PROVIDERS.iter().find(|p| p.id == id).unwrap_or(&PROVIDERS[0])
@@ -173,44 +187,139 @@ pub struct Cfg<'a> {
     pub base: &'a str,
 }
 
-fn call(c: &Cfg, system: &str, user: &str, max_tokens: u32) -> Result<(String, u64, u64)> {
-    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(90)).build();
-    let p = prov(c.provider);
-    let (provider, key, model) = (c.provider, c.key, c.model);
-    let resp = if provider == "anthropic" {
-        agent
-            .post(p.url)
-            .set("x-api-key", key)
-            .set("anthropic-version", "2023-06-01")
-            .send_json(json!({"model": model, "max_tokens": max_tokens, "system": system, "messages": [{"role": "user", "content": user}]}))
-    } else {
-        let url = if provider == "custom" { custom_url(c.base) } else { p.url.to_string() };
-        if provider == "custom" && !(url.starts_with("http://") || url.starts_with("https://")) {
+/// A request ready to send: address, headers and body. Built separately from sending so every provider's format can be tested.
+pub struct Req {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Value,
+}
+
+fn endpoint(c: &Cfg, path: &str) -> Result<String> {
+    if c.provider == "custom" {
+        let b = c.base.trim().trim_end_matches('/');
+        if !(b.starts_with("http://") || b.starts_with("https://")) {
             return Err(anyhow!("Enter the address of the service first, for example http://localhost:11434/v1"));
         }
-        let mut body = json!({"model": model, "max_tokens": max_tokens, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]});
-        if p.json_mode {
-            body["response_format"] = json!({"type": "json_object"});
-        }
-        let mut r = agent.post(&url);
-        if !key.is_empty() {
-            r = r.set("Authorization", &format!("Bearer {key}"));
-        }
-        r.send_json(body)
+        let root = b.trim_end_matches("/chat/completions").trim_end_matches("/models");
+        return Ok(format!("{root}/{path}"));
+    }
+    let chat = prov(c.provider).url;
+    Ok(if path == "models" { chat.replace("/chat/completions", "/models").replace("/v1/messages", "/v1/models") } else { chat.to_string() })
+}
+
+fn auth(c: &Cfg) -> Vec<(String, String)> {
+    if c.provider == "anthropic" {
+        vec![("x-api-key".into(), c.key.into()), ("anthropic-version".into(), "2023-06-01".into())]
+    } else if c.key.is_empty() {
+        vec![]
+    } else {
+        vec![("Authorization".into(), format!("Bearer {}", c.key))]
+    }
+}
+
+pub fn chat_request(c: &Cfg, system: &str, user: &str, max_tokens: u32) -> Result<Req> {
+    let p = prov(c.provider);
+    if c.provider == "anthropic" {
+        return Ok(Req { url: endpoint(c, "chat")?, headers: auth(c), body: json!({"model": c.model, "max_tokens": max_tokens, "system": system, "messages": [{"role": "user", "content": user}]}) });
+    }
+    // OpenAI's newer models refuse "max_tokens"; everyone else still expects it
+    let limit = if c.provider == "openai" { "max_completion_tokens" } else { "max_tokens" };
+    let mut body = json!({"model": c.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]});
+    body[limit] = json!(max_tokens);
+    if p.json_mode {
+        body["response_format"] = json!({"type": "json_object"});
+    }
+    Ok(Req { url: endpoint(c, "chat/completions")?, headers: auth(c), body })
+}
+
+pub fn models_request(c: &Cfg) -> Result<Req> {
+    Ok(Req { url: endpoint(c, "models")?, headers: auth(c), body: Value::Null })
+}
+
+/// Chat models from a provider's model list, without embeddings, speech, images and the like.
+pub fn parse_models(v: &Value) -> Vec<String> {
+    let arr = v["data"].as_array().or_else(|| v["models"].as_array()).cloned().unwrap_or_default();
+    let skip = ["embed", "whisper", "tts", "transcribe", "moderation", "image", "dall-e", "audio", "realtime", "rerank", "vision-exp", "guard", "imagen", "veo", "aqa", "speech", "ocr", "search-preview", "computer-use"];
+    let mut out: Vec<String> = arr
+        .iter()
+        .filter_map(|m| m["id"].as_str().or_else(|| m["name"].as_str()))
+        .map(|s| s.trim_start_matches("models/").to_string())
+        .filter(|s| !s.is_empty() && !skip.iter().any(|k| s.to_lowercase().contains(k)))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The most sensible low-cost model from a live list, or None when nothing fits and the caller should keep its default.
+pub fn pick_default(provider: &str, ids: &[String]) -> Option<String> {
+    let has = |s: &str| ids.iter().find(|i| i.as_str() == s).cloned();
+    let newest = |pred: &dyn Fn(&str) -> bool| ids.iter().filter(|i| pred(&i.to_lowercase())).max().cloned();
+    let plain = |i: &str| !["lite", "preview", "exp", "thinking", "latest-", "-001", "-0"].iter().any(|k| i.contains(k));
+    match provider {
+        "anthropic" => newest(&|i| i.contains("haiku")),
+        "openai" => has("gpt-4o-mini").or_else(|| newest(&|i| i.contains("mini") && i.starts_with("gpt") && plain(i))),
+        "gemini" => newest(&|i| i.contains("flash") && !i.contains("lite") && !i.contains("preview") && !i.contains("exp") && !i.contains("live") && !i.contains("image")),
+        "deepseek" => has("deepseek-flash").or_else(|| newest(&|i| i.contains("flash"))).or_else(|| has("deepseek-chat")),
+        "mistral" => has("mistral-small-latest").or_else(|| newest(&|i| i.contains("small"))),
+        "groq" => has("llama-3.3-70b-versatile").or_else(|| newest(&|i| i.contains("llama") && i.contains("70b"))),
+        "xai" => newest(&|i| i.contains("mini")),
+        "openrouter" => has("openai/gpt-4o-mini"),
+        "custom" => ids.first().cloned(),
+        _ => None,
+    }
+}
+
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(90)).build()
+}
+
+fn explain(c: &Cfg, code: u16, body: &Value) -> anyhow::Error {
+    let who = label(c.provider);
+    let msg = body["error"]["message"].as_str().or_else(|| body["error"].as_str()).or_else(|| body[0]["error"]["message"].as_str()).unwrap_or("").to_string();
+    anyhow!(match code {
+        401 | 403 => format!("{who} did not accept the key. Check that it is the key for {who} and that you copied all of it."),
+        402 | 429 => format!("{who} refused the request (limit or no credit). {msg}"),
+        404 => format!("That model name or address is not available on {who}. {msg}"),
+        _ => format!("{who} returned an error ({code}). {msg}"),
+    })
+}
+
+/// The models this key can use right now, with the one Recora suggests.
+pub fn list_models(c: &Cfg) -> Result<(Vec<String>, Option<String>)> {
+    if c.key.trim().is_empty() && c.provider != "custom" && c.provider != "openrouter" {
+        return Err(anyhow!("Add your API key first"));
+    }
+    let r = models_request(c)?;
+    let mut req = agent().get(&r.url);
+    for (k, v) in &r.headers {
+        req = req.set(k, v);
+    }
+    let v: Value = match req.call() {
+        Ok(r) => r.into_json()?,
+        Err(ureq::Error::Status(code, r)) => return Err(explain(c, code, &r.into_json().unwrap_or(Value::Null))),
+        Err(e) => return Err(anyhow!("Could not reach {}. Check the internet connection. ({e})", label(c.provider))),
     };
+    let ids = parse_models(&v);
+    if ids.is_empty() {
+        return Err(anyhow!("{} returned no models for this key.", label(c.provider)));
+    }
+    let pick = pick_default(c.provider, &ids);
+    Ok((ids, pick))
+}
+
+fn call(c: &Cfg, system: &str, user: &str, max_tokens: u32) -> Result<(String, u64, u64)> {
+    let provider = c.provider;
+    let r = chat_request(c, system, user, max_tokens)?;
+    let mut req = agent().post(&r.url);
+    for (k, v) in &r.headers {
+        req = req.set(k, v);
+    }
+    let resp = req.send_json(r.body);
     let v: Value = match resp {
         Ok(r) => r.into_json()?,
-        Err(ureq::Error::Status(code, r)) => {
-            let body: Value = r.into_json().unwrap_or(Value::Null);
-            let msg = body["error"]["message"].as_str().or_else(|| body["error"].as_str()).or_else(|| body[0]["error"]["message"].as_str()).unwrap_or("").to_string();
-            return Err(anyhow!(match code {
-                401 | 403 => "The key was not accepted. Check that you copied all of it.".to_string(),
-                402 | 429 => format!("The provider refused the request (limit or no credit). {msg}"),
-                404 => format!("That model name or address is not available for this key. {msg}"),
-                _ => format!("The provider returned an error ({code}). {msg}"),
-            }));
-        }
-        Err(e) => return Err(anyhow!("Could not reach the provider. Check the internet connection. ({e})")),
+        Err(ureq::Error::Status(code, r)) => return Err(explain(c, code, &r.into_json().unwrap_or(Value::Null))),
+        Err(e) => return Err(anyhow!("Could not reach {}. Check the internet connection. ({e})", label(provider))),
     };
     if provider == "anthropic" {
         let text = v["content"].as_array().map(|a| a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("")).unwrap_or_default();
@@ -230,7 +339,7 @@ pub fn edit(c: &Cfg, instruction: &str, f: &Facts) -> Result<Reply> {
         return Err(anyhow!("Enter the model name in Settings first"));
     }
     let user = format!("{}\nInstruction: {}", describe(f), instruction.trim());
-    let (text, tin, tout) = call(&Cfg { provider: c.provider, key: c.key.trim(), model, base: c.base }, SYSTEM, &user, 900)?;
+    let (text, tin, tout) = call(&Cfg { provider: c.provider, key: c.key.trim(), model, base: c.base }, SYSTEM, &user, 3000)?;
     let (explain, ops) = parse(&text, f.duration)?;
     Ok(Reply { explain, ops, tokens_in: tin, tokens_out: tout })
 }
@@ -240,12 +349,20 @@ pub fn test(c: &Cfg) -> Result<()> {
     if model.is_empty() {
         return Err(anyhow!("Enter the model name first"));
     }
-    call(&Cfg { provider: c.provider, key: c.key.trim(), model, base: c.base }, "Reply with the single word OK.", "Hello", 8).map(|_| ())
+    call(&Cfg { provider: c.provider, key: c.key.trim(), model, base: c.base }, "Reply with this JSON object and nothing else: {\"ok\": true}", "Hello", 64).map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_test_and_the_real_request_both_mention_json() {
+        // some providers refuse the JSON switch unless the prompt contains the word "json"
+        assert!(SYSTEM.to_lowercase().contains("json"));
+        let src = include_str!("ai.rs");
+        assert!(src.contains("Reply with this JSON object"));
+    }
 
     #[test]
     fn knows_every_provider_and_builds_custom_addresses() {
@@ -256,6 +373,133 @@ mod tests {
         assert_eq!(custom_url("http://localhost:11434/v1/"), "http://localhost:11434/v1/chat/completions");
         assert_eq!(custom_url("http://x/v1/chat/completions"), "http://x/v1/chat/completions");
         assert_eq!(default_model("something else"), default_model("anthropic"));
+    }
+
+    fn cfg<'a>(p: &'a str, key: &'a str, model: &'a str, base: &'a str) -> Cfg<'a> {
+        Cfg { provider: p, key, model, base }
+    }
+
+    #[test]
+    fn every_provider_gets_the_request_its_service_expects() {
+        let ids = ["anthropic", "openai", "gemini", "openrouter", "deepseek", "mistral", "groq", "xai"];
+        for id in ids {
+            let r = chat_request(&cfg(id, "K", "m1", ""), "be brief (JSON)", "hi", 100).unwrap();
+            assert!(r.url.starts_with("https://"), "{id}");
+            let m = models_request(&cfg(id, "K", "m1", "")).unwrap();
+            assert!(m.url.ends_with("/models"), "{id}: {}", m.url);
+            assert_eq!(r.body["model"], "m1", "{id}");
+            if id == "anthropic" {
+                assert!(r.url.ends_with("/v1/messages") && m.url == "https://api.anthropic.com/v1/models");
+                assert!(r.headers.iter().any(|h| h.0 == "x-api-key" && h.1 == "K") && r.headers.iter().any(|h| h.0 == "anthropic-version"));
+                assert_eq!(r.body["system"], "be brief (JSON)");
+                assert_eq!(r.body["max_tokens"], 100);
+            } else {
+                assert!(r.url.ends_with("/chat/completions"), "{id}");
+                assert!(r.headers.contains(&("Authorization".to_string(), "Bearer K".to_string())), "{id}");
+                assert_eq!(r.body["messages"][0]["role"], "system");
+                assert_eq!(r.body["messages"][1]["content"], "hi");
+            }
+            // the cap is named the way each service wants it
+            assert_eq!(r.body.get("max_completion_tokens").is_some(), id == "openai", "{id}");
+            assert_eq!(r.body.get("max_tokens").is_some(), id != "openai", "{id}");
+        }
+        assert_eq!(chat_request(&cfg("gemini", "K", "m", ""), "s", "u", 5).unwrap().url, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+        assert_eq!(models_request(&cfg("gemini", "K", "m", "")).unwrap().url, "https://generativelanguage.googleapis.com/v1beta/openai/models");
+        assert_eq!(models_request(&cfg("groq", "K", "m", "")).unwrap().url, "https://api.groq.com/openai/v1/models");
+        assert_eq!(models_request(&cfg("openrouter", "", "m", "")).unwrap().url, "https://openrouter.ai/api/v1/models");
+        assert_eq!(models_request(&cfg("deepseek", "K", "m", "")).unwrap().url, "https://api.deepseek.com/models");
+        // JSON mode only where it is accepted, and the word "json" is always in the prompts
+        for id in ["openai", "deepseek", "mistral", "groq"] {
+            assert!(chat_request(&cfg(id, "K", "m", ""), "s", "u", 5).unwrap().body.get("response_format").is_some(), "{id}");
+        }
+        for id in ["gemini", "openrouter", "xai"] {
+            assert!(chat_request(&cfg(id, "K", "m", ""), "s", "u", 5).unwrap().body.get("response_format").is_none(), "{id}");
+        }
+        // a local service needs no key, and accepts the address in either form
+        let c = cfg("custom", "", "llama3.1", "http://localhost:11434/v1/");
+        let r = chat_request(&c, "s", "u", 5).unwrap();
+        assert_eq!(r.url, "http://localhost:11434/v1/chat/completions");
+        assert!(r.headers.is_empty());
+        assert_eq!(models_request(&cfg("custom", "", "", "http://localhost:11434/v1/chat/completions")).unwrap().url, "http://localhost:11434/v1/models");
+        assert!(chat_request(&cfg("custom", "", "m", "localhost"), "s", "u", 5).is_err());
+    }
+
+    #[test]
+    fn reads_every_providers_model_list_and_picks_a_sensible_default() {
+        let openai = json!({"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}, {"id": "text-embedding-3-small"}, {"id": "whisper-1"}, {"id": "dall-e-3"}, {"id": "gpt-5-mini"}]});
+        let ids = parse_models(&openai);
+        assert!(ids.contains(&"gpt-4o-mini".to_string()) && !ids.iter().any(|i| i.contains("embedding") || i.contains("whisper") || i.contains("dall")));
+        assert_eq!(pick_default("openai", &ids).as_deref(), Some("gpt-4o-mini"));
+        let gem = json!({"data": [{"id": "models/gemini-2.5-pro"}, {"id": "models/gemini-2.5-flash"}, {"id": "models/gemini-2.5-flash-lite"}, {"id": "models/gemini-3.0-flash"}, {"id": "models/text-embedding-004"}, {"id": "models/imagen-4.0"}]});
+        let ids = parse_models(&gem);
+        assert!(ids.contains(&"gemini-2.5-flash".to_string()) && !ids.iter().any(|i| i.starts_with("models/")));
+        assert_eq!(pick_default("gemini", &ids).as_deref(), Some("gemini-3.0-flash"));
+        let ds = parse_models(&json!({"data": [{"id": "deepseek-v4-pro"}, {"id": "deepseek-flash"}]}));
+        assert_eq!(pick_default("deepseek", &ds).as_deref(), Some("deepseek-flash"));
+        let old_ds = parse_models(&json!({"data": [{"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]}));
+        assert_eq!(pick_default("deepseek", &old_ds).as_deref(), Some("deepseek-chat"));
+        let an = parse_models(&json!({"data": [{"id": "claude-opus-5-5"}, {"id": "claude-haiku-5-5"}, {"id": "claude-sonnet-5-5"}], "has_more": false}));
+        assert_eq!(pick_default("anthropic", &an).as_deref(), Some("claude-haiku-5-5"));
+        let groq = parse_models(&json!({"data": [{"id": "llama-3.3-70b-versatile"}, {"id": "whisper-large-v3"}, {"id": "llama-guard-4-12b"}]}));
+        assert_eq!(groq, vec!["llama-3.3-70b-versatile".to_string()]);
+        assert_eq!(pick_default("groq", &groq).as_deref(), Some("llama-3.3-70b-versatile"));
+        let ollama = parse_models(&json!({"object": "list", "data": [{"id": "llama3.1:latest"}, {"id": "qwen2.5:7b"}]}));
+        assert_eq!(pick_default("custom", &ollama).as_deref(), Some("llama3.1:latest"));
+        assert!(parse_models(&json!({"error": "x"})).is_empty());
+    }
+
+    /// A tiny local server that answers like a provider, so the real network path is exercised end to end.
+    fn serve(replies: Vec<(&'static str, String)>) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", l.local_addr().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for (status, body) in replies {
+                let (mut s, _) = l.accept().unwrap();
+                let mut buf = vec![0u8; 16384];
+                let mut got = Vec::new();
+                loop {
+                    let n = s.read(&mut buf).unwrap();
+                    got.extend_from_slice(&buf[..n]);
+                    let t = String::from_utf8_lossy(&got).to_string();
+                    if let Some(h) = t.find("\r\n\r\n") {
+                        let len = t[..h].to_lowercase().split("content-length:").nth(1).and_then(|x| x.lines().next()).and_then(|x| x.trim().parse::<usize>().ok()).unwrap_or(0);
+                        if got.len() >= h + 4 + len {
+                            break;
+                        }
+                    }
+                    if n == 0 {
+                        break;
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&got).to_string());
+                let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            }
+        });
+        (addr, rx)
+    }
+
+    #[test]
+    fn talks_to_a_service_end_to_end_and_explains_failures() {
+        let reply = json!({"choices": [{"message": {"content": "{\"explain\": \"Cut the start\", \"ops\": [{\"op\": \"cut\", \"from\": 0, \"to\": 5}]}"}}], "usage": {"prompt_tokens": 11, "completion_tokens": 7}}).to_string();
+        let models = json!({"data": [{"id": "llama3.1"}, {"id": "nomic-embed-text"}]}).to_string();
+        let (base, rx) = serve(vec![("200 OK", models), ("200 OK", reply), ("429 Too Many Requests", json!({"error": {"message": "slow down"}}).to_string())]);
+        let c = cfg("custom", "secret", "llama3.1", &base);
+        let (ids, pick) = list_models(&c).unwrap();
+        assert_eq!(ids, vec!["llama3.1".to_string()]);
+        assert_eq!(pick.as_deref(), Some("llama3.1"));
+        let seen = rx.recv().unwrap();
+        assert!(seen.starts_with("GET /models"), "{seen}");
+        assert!(seen.to_lowercase().contains("authorization: bearer secret"));
+        let out = edit(&c, "remove the first 5 seconds", &Facts { duration: 60.0, ..Default::default() }).unwrap();
+        assert_eq!((out.tokens_in, out.tokens_out), (11, 7));
+        assert_eq!(out.ops.len(), 1);
+        let seen = rx.recv().unwrap();
+        assert!(seen.starts_with("POST /chat/completions"), "{seen}");
+        assert!(seen.contains("\"model\":\"llama3.1\"") && seen.contains("max_tokens"));
+        let err = edit(&c, "x", &Facts { duration: 60.0, ..Default::default() }).unwrap_err().to_string();
+        assert!(err.contains("limit or no credit") && err.contains("slow down"), "{err}");
     }
 
     #[test]

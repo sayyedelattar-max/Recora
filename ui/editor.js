@@ -2,6 +2,7 @@
 (() => {
   const { icon: I, $, $$, esc, invoke, fileUrl, fmt, toast, ICONS } = R;
   Object.assign(ICONS, {
+    cc: '<rect x="3.5" y="6" width="17" height="12" rx="3"/><path d="M8 12.5h3M13.5 12.5h2.5M8 15h2M12.5 15h3.5"/>',
     cut: '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 17M8 15.5L20 7"/>',
     add: '<path d="M12 5v14M5 12h14"/>',
     look: '<rect x="4" y="5" width="16" height="11" rx="2.5"/><path d="M8 20h8"/>',
@@ -41,11 +42,11 @@
   window.openEditor = function (it, onDone, opts = {}) {
     closeEditor();
     const dur = it.duration || 1;
-    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, lk: {}, muteOrig: false, chap: (it.markers || []).slice().sort((a, b) => a - b).map((t, i) => ({ id: uid++, src: t, title: "Part " + (i + 1) })), cur: [], cfx: { rings: false, halo: false }, fr: { kind: "", color: "#101828", color2: "#f8cdda", path: "", pad: 0.07, radius: 0.02, shadow: true }, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", wave: null, q: null, prev: null, lv: 2, rec: null, ar: 16 / 9, busy: false };
+    const st = { clips: [{ id: uid++, start: 0, end: dur, speed: 1 }], ov: [], sel: 0, selOv: null, trans: { kind: "none", dur: 0.5 }, preset: "", intro: null, outro: null, lk: {}, muteOrig: false, chap: (it.markers || []).slice().sort((a, b) => a - b).map((t, i) => ({ id: uid++, src: t, title: "Part " + (i + 1) })), cur: [], cfx: { rings: false, halo: false }, fr: { kind: "", color: "#101828", color2: "#f8cdda", path: "", pad: 0.07, radius: 0.02, shadow: true }, dn: false, duck: true, fi: 0, fo: 0, t: 0, playing: false, zoom: 1, strip: "", wave: null, q: null, prev: null, lv: 2, cap: { words: [], lang: "ar", model: "", status: null, busy: "", prog: 0, on: true, style: "highlight", pos: "bottom", size: 0.055, sel: null, err: "" }, rec: null, ar: 16 / 9, busy: false };
     const hist = [];
-    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro, a: [st.dn, st.duck, st.fi, st.fo], f: st.fr, m: st.muteOrig });
+    const snap = () => JSON.stringify({ c: st.clips, o: st.ov, t: st.trans, i: st.intro, u: st.outro, a: [st.dn, st.duck, st.fi, st.fo], f: st.fr, m: st.muteOrig, w: st.cap.words });
     const push = () => { hist.push(snap()); if (hist.length > 60) hist.shift(); };
-    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.intro = d.i || null; st.outro = d.u || null; if (d.a) [st.dn, st.duck, st.fi, st.fo] = d.a; if (d.f) st.fr = d.f; st.muteOrig = !!d.m; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
+    const undo = () => { const h = hist.pop(); if (!h) return; const d = JSON.parse(h); st.clips = d.c; st.ov = d.o; st.trans = d.t; st.intro = d.i || null; st.outro = d.u || null; if (d.a) [st.dn, st.duck, st.fi, st.fo] = d.a; if (d.f) st.fr = d.f; st.muteOrig = !!d.m; if (d.w) st.cap.words = d.w; st.sel = Math.min(st.sel, st.clips.length - 1); st.selOv = null; seek(st.t); draw(); };
 
     const len = (c) => (c.end - c.start) / c.speed;
     const total = () => st.clips.reduce((s, c) => s + len(c), 0);
@@ -67,6 +68,7 @@
     const vid = $("#ev", el);
     const tlEl = $("#tl", el), side = $("#side", el), ovl = $("#ovl", el), frame = $("#frame", el);
     invoke("edit_analyze_quick", { path: it.path }).then((a) => { st.q = a; drawTl(); }).catch(() => {});
+    invoke("cap_words", { path: it.path }).then((c) => { if (c && Array.isArray(c.w) && c.w.length) { st.cap.words = c.w; st.cap.lang = c.lang || st.cap.lang; drawSide(); drawTl(); paint(); } }).catch(() => {});
     invoke("edit_cursor", { path: it.path }).then((c) => { st.cur = Array.isArray(c) && c.length > 1 ? c : []; if (st.cur.length) { drawTl(); drawSide(); } }).catch(() => {});
     invoke("edit_wave", { path: it.path }).then((p) => { st.wave = p ? fileUrl(p) : ""; drawTl(); }).catch(() => {});
     invoke("edit_strip", { path: it.path, n: 24 }).then((p) => { if (p) { st.strip = fileUrl(p); draw(); } }).catch(() => {});
@@ -296,7 +298,7 @@
       const LK = { tcl: "v", taud: "a", tov: "e", tbg: "b" };
       const row = (name, id, h, body) => { const lk = LK[id] && st.lk[LK[id]]; return `<div class="tr"><div class="lab"><span>${name}</span>${LK[id] ? `<button class="lkb${lk ? " on" : ""}" data-lk="${LK[id]}" title="${lk ? "Unlock" : "Lock"} this row" aria-label="${lk ? "Unlock" : "Lock"} ${name}">${I(lk ? "lock" : "unlock")}</button>` : ""}${id === "taud" ? `<button class="lkb${st.muteOrig ? " on" : ""}" data-mute="1" title="${st.muteOrig ? "Original sound is off" : "Silence the original sound"}" aria-label="Silence the original sound">${I(st.muteOrig ? "mute" : "sound")}</button>` : ""}</div><div class="bd${lk ? " lk" : ""}" id="${id}" style="height:${h}px">${body}</div></div>`; };
       tlEl.innerHTML = `<div class="tl-in" style="width:${W + LAB + 14}px"><div class="tr"><div class="lab"></div><div class="tl-ruler bd" id="ruler">${ticks}</div></div>
-        ${row("Video", "tcl", 76, clips + vBands)}${row("Transitions", "ttr", 26, jn)}${row("Audio", "taud", 36 + (ps.n ? ps.n * 22 + 4 : 0), waves + aBands + snd.map((o) => bar(o, 38, ps.lane.get(o.id))).join(""))}${row("Effects", "tov", Math.max(1, pf.n) * 22 + 6, fx.map((o) => bar(o, 0, pf.lane.get(o.id))).join("") || `<em>Add text, a highlight, a blur or a picture from the side panel</em>`)}${st.cur.length ? row("Mouse", "tmo", 26, clicksSrc().map((c) => { const t = srcToTl(c[0]); return t == null ? "" : `<i class="clk" data-cx="${c[1]}" data-cy="${c[2]}" data-ct="${c[0]}" style="left:${t * k}px" title="Click at ${fmt(t)}"></i>`; }).join("") || "<em>No clicks were recorded</em>") : ""}${row("Backdrop", "tbg", 26, st.fr.kind ? `<div class="bar bgbar" id="bgbar" style="left:0;width:${total() * k}px">${FR_KINDS.find((k) => k[0] === st.fr.kind)[1]} behind the picture</div>` : `<em>Put the picture on a colour, a gradient or a photo from the side panel</em>`)}<i class="ph2" id="ph2"></i></div>`;
+        ${row("Video", "tcl", 76, clips + vBands)}${row("Transitions", "ttr", 26, jn)}${row("Audio", "taud", 36 + (ps.n ? ps.n * 22 + 4 : 0), waves + aBands + snd.map((o) => bar(o, 38, ps.lane.get(o.id))).join(""))}${row("Effects", "tov", Math.max(1, pf.n) * 22 + 6, fx.map((o) => bar(o, 0, pf.lane.get(o.id))).join("") || `<em>Add text, a highlight, a blur or a picture from the side panel</em>`)}${st.cur.length ? row("Mouse", "tmo", 26, clicksSrc().map((c) => { const t = srcToTl(c[0]); return t == null ? "" : `<i class="clk" data-cx="${c[1]}" data-cy="${c[2]}" data-ct="${c[0]}" style="left:${t * k}px" title="Click at ${fmt(t)}"></i>`; }).join("") || "<em>No clicks were recorded</em>") : ""}${st.cap.on && capTl().length ? row("Captions", "tcp", 26, capTl().map((L) => `<div class="bar capbar" data-ct="${L[0].s}" style="left:${L[0].s * k}px;width:${Math.max(8, (L[L.length - 1].e - L[0].s) * k)}px" title="${esc(L.map((x) => x.w).join(" "))}">${esc(L.map((x) => x.w).join(" "))}</div>`).join("")) : ""}${row("Backdrop", "tbg", 26, st.fr.kind ? `<div class="bar bgbar" id="bgbar" style="left:0;width:${total() * k}px">${FR_KINDS.find((k) => k[0] === st.fr.kind)[1]} behind the picture</div>` : `<em>Put the picture on a colour, a gradient or a photo from the side panel</em>`)}<i class="ph2" id="ph2"></i></div>`;
       tlEl.querySelector(".tl-in").style.setProperty("--k", k);
       wireTl(k); paintHead();
     }
@@ -559,7 +561,7 @@
     function drawSide() {
       const o = st.ov.find((x) => x.id === st.selOv), c = st.clips[st.sel];
       const swatches = (cur) => COLORS.map((x) => `<button class="sw${x === cur ? " on" : ""}" data-c="${x}" style="background:${x}"></button>`).join("");
-      const TABS = [["edit", "cut", "Edit"], ["add", "add", "Add"], ["look", "look", "Look"], ["sound", "wave", "Sound"], ["share", "share", "Share"], ["ai", "spark", "AI"]];
+      const TABS = [["edit", "cut", "Edit"], ["add", "add", "Add"], ["look", "look", "Look"], ["sound", "wave", "Sound"], ["cap", "cc", "Captions"], ["share", "share", "Share"], ["ai", "spark", "AI"]];
       if (!TABS.some((t) => t[0] === st.tab)) st.tab = "edit";
       const P = {
         edit: `<button class="sm-b" id="quick" style="background:var(--accent);margin-bottom:2px"><b style="color:#fff">Quick clean-up</b><span style="color:rgba(255,255,255,.85)">One tap: removes silences and speeds up still moments</span></button><div class="row2 lvrow"><span>How much</span><div class="seg fit">${[[1, "Careful"], [2, "Balanced"], [3, "Thorough"]].map(([v, n]) => `<button data-lv="${v}" class="${st.lv === v ? "on" : ""}">${n}</button>`).join("")}</div></div><p class="ai-note" id="qinfo" style="margin:0">Point at the button to see what it would change, on the timeline.</p>
@@ -576,6 +578,7 @@
         <div class="add"><button class="btn" data-add="text">${I("text")}Text</button><button class="btn" data-add="box">${I("box")}Highlight</button><button class="btn" data-add="blur">${I("blur")}Blur</button><button class="btn" data-add="zoom">${I("zoom")}Zoom</button><button class="btn" data-add="voice">${I("mic")}Voice</button><button class="btn" data-add="image">${I("image")}Picture</button><button class="btn" data-add="sound">${I("sound")}Sound</button></div>${cardsCard()}`,
         look: `${frameCard()}${cursorCard()}`,
         sound: `${audioCard()}`,
+        cap: capCard(),
         share: `${chaptersCard()}${changesCard()}`,
         ai: `<div class="label sm">Ask the AI</div>
         <div class="card">${S_AI() ? `<textarea id="ai-q" dir="auto" rows="2" placeholder="For example: remove the first 10 seconds and speed up the slow parts"></textarea><div class="row2"><span class="ai-note" id="ai-est"></span><button class="btn primary sm" id="ai-go">Suggest edits</button></div><div id="ai-out"></div>` : `<p class="muted" style="margin:0">Optional. Add your own API key in Settings and describe the edit in a sentence. Nothing is sent until you press the button.</p><div class="row2"><button class="btn sm" id="ai-set">Set it up</button></div>`}</div>`,
@@ -715,6 +718,92 @@
       $$("[data-frc]", side).forEach((b) => (b.onclick = () => { push(); st.fr.color = b.dataset.frc; paintFrame(); drawSide(); }));
       $$("[data-frg]", side).forEach((b) => (b.onclick = () => { push(); [st.fr.color, st.fr.color2] = b.dataset.frg.split("|"); paintFrame(); drawSide(); }));
     }
+
+    // ---------------------------------------------------------------- captions
+    const CAP_END = /[.!?؟…،,;؛]$/;
+    // the spoken words that are still in the edit, on the edited timeline, grouped into short lines
+    function capTl() {
+      const ws = [], S = starts(); for (let i = 0; i < st.cap.words.length; i++) { const w = st.cap.words[i], m = (w.s + w.e) / 2, k = st.clips.findIndex((c) => m >= c.start && m < c.end); if (k < 0) continue; const c = st.clips[k], a = S[k] + (Math.max(w.s, c.start) - c.start) / c.speed, b = S[k] + (Math.min(w.e, c.end) - c.start) / c.speed; ws.push({ i, s: a, e: Math.max(b, a + 0.08), w: w.w }); }
+      const L = []; let cur = [], chars = 0;
+      for (const w of ws) { const gap = cur.length ? w.s - cur[cur.length - 1].e : 0; if (cur.length && (gap > 0.9 || cur.length >= 8 || chars + w.w.length > 46 || CAP_END.test(cur[cur.length - 1].w))) { L.push(cur); cur = []; chars = 0; } cur.push(w); chars += w.w.length + 1; }
+      if (cur.length) L.push(cur); return L;
+    }
+    const capGone = (w) => { const m = (w.s + w.e) / 2; return !st.clips.some((c) => m >= c.start && m < c.end); };
+    function capsOut(shift) {
+      if (!st.cap.on || !st.cap.words.length) return null;
+      const lines = capTl().map((L) => ({ words: L.map((w) => ({ s: Math.max(0, shift(w.s)), e: Math.max(0.05, shift(w.e)), w: w.w })) }));
+      return lines.length ? { style: st.cap.style, pos: st.cap.pos, size: st.cap.size, color: "#ffffff", hl_color: "#ffd60a", lines } : null;
+    }
+    const RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
+    function paintCaps() {
+      let box = $("#capv", el); if (!box) { box = document.createElement("div"); box.id = "capv"; box.className = "capv"; frame.appendChild(box); }
+      const c = st.cap; if (!c.on || !c.words.length) { box.innerHTML = ""; return; }
+      const t = st.t, L = capTl().find((l) => t >= l[0].s - 0.05 && t <= l[l.length - 1].e + 0.15);
+      if (!L) { box.innerHTML = ""; return; }
+      const H = frame.clientHeight || 360, rtl = RTL.test(L.map((w) => w.w).join(""));
+      box.className = "capv " + c.pos + (c.style === "classic" ? " box" : ""); box.style.fontSize = Math.round(H * c.size * 0.9) + "px"; box.dir = rtl ? "rtl" : "ltr";
+      let cur = -1; if (c.style !== "classic") for (let i = 0; i < L.length; i++) if (L[i].s <= t) cur = i;
+      box.innerHTML = `<span>${L.map((w, i) => `<b class="${i === cur ? "now" + (c.style === "pop" ? " pop" : "") : ""}">${esc(w.w)}</b>`).join(" ")}</span>`;
+    }
+    function capCard() {
+      const c = st.cap;
+      if (!c.status && !c.busy) { invoke("cap_status").then((x) => { c.status = x; if (!c.model) c.model = (x.models.find((m) => m.have) || x.models[2] || x.models[0]).id; if (st.tab === "cap") drawSide(); }).catch((e) => { c.status = { engine: false, models: [] }; c.err = String(e); }); return `<div class="label sm">Captions</div><div class="card"><p class="ai-note" style="margin:0">Checking…</p></div>`; }
+      if (c.busy) { const dl = c.busy === "dl"; return `<div class="label sm">Captions</div><div class="card"><p class="ai-note" style="margin:0 0 8px" id="cap-msg">${dl ? "Downloading the speech model. This happens once." : "Listening to the recording. You can keep editing meanwhile."}</p><div class="pbar"><i id="cap-bar" style="width:${c.prog}%"></i></div><div class="row2"><span class="muted" id="cap-pct">${c.prog}%</span><button class="btn sm" id="cap-cancel">Cancel</button></div></div>`; }
+      if (!c.status.engine) return `<div class="label sm">Captions</div><div class="card"><p class="ai-note" style="margin:0">The speech engine is not part of this copy of Recora, so captions can't be made here.</p></div>`;
+      const err = c.err ? `<p class="ai-note" style="margin:8px 0 0;color:var(--danger,#ff3b30)">${esc(c.err)}</p>` : "";
+      const m = c.status.models.find((x) => x.id === c.model) || c.status.models[0];
+      if (!c.words.length) {
+        const mods = c.status.models.map((x) => `<button class="mdl${x.id === c.model ? " on" : ""}" data-mdl="${x.id}"><b>${esc(x.label)}</b><span>${esc(x.note)}</span><em>${x.have ? "Ready" : x.mb + " MB"}</em></button>`).join("");
+        return `<div class="label sm">Captions from your voice</div><div class="card"><p class="ai-note" style="margin:0 0 8px">Works on this computer. Nothing is uploaded.</p><div class="mdls">${mods}</div>
+          <div class="row2"><span>Language</span><div class="seg fit" id="cap-lang">${CAP_LANGS.map(([k, n]) => `<button data-l="${k}" class="${c.lang === k ? "on" : ""}">${n}</button>`).join("")}</div></div>
+          <button class="btn primary" id="cap-go" style="width:100%;margin-top:8px">${m && m.have ? "Create captions" : "Download and create captions"}</button>${err}</div>`;
+      }
+      const lines = capTl(), n = c.words.length;
+      const sel = c.sel ? [Math.min(c.sel[0], c.sel[1]), Math.max(c.sel[0], c.sel[1])] : null;
+      const tr = c.words.map((w, i) => `<span class="cw${capGone(w) ? " gone" : ""}${sel && i >= sel[0] && i <= sel[1] ? " sel" : ""}" data-w="${i}">${esc(w.w)}</span>`).join(" ");
+      return `<div class="label sm">Captions</div><div class="card"><div class="row2"><span>Show on the video</span><button class="switch${c.on ? " on" : ""}" id="cap-on" role="switch" aria-checked="${c.on}"></button></div>
+        ${c.on ? `<div class="row2"><span>Style</span><div class="seg fit" id="cap-st">${[["classic", "Classic"], ["highlight", "Highlight"], ["pop", "Pop"]].map(([k, v]) => `<button data-k="${k}" class="${c.style === k ? "on" : ""}">${v}</button>`).join("")}</div></div>
+        <div class="row2"><span>Place</span><div class="seg fit" id="cap-ps">${[["top", "Top"], ["middle", "Middle"], ["bottom", "Bottom"]].map(([k, v]) => `<button data-k="${k}" class="${c.pos === k ? "on" : ""}">${v}</button>`).join("")}</div></div>
+        <div class="row2"><span>Size</span><div class="seg fit" id="cap-sz">${[[0.04, "S"], [0.055, "M"], [0.075, "L"]].map(([k, v]) => `<button data-k="${k}" class="${c.size === k ? "on" : ""}">${v}</button>`).join("")}</div></div>` : ""}</div>
+        <div class="label sm">What was said <em class="muted" style="font-weight:400">${n} words</em></div>
+        <div class="card"><div class="trs" id="cap-tr" dir="auto">${tr}</div><p class="ai-note" style="margin:8px 0">Click a word to jump to it. Double-click to correct it. Shift-click to choose a stretch, then remove it from the video.</p>
+        <div class="row2" style="flex-wrap:wrap;gap:6px"><button class="btn sm" id="cap-cut"${sel ? "" : " disabled"}>Remove chosen words from the video</button><button class="btn sm" id="cap-redo">Start over</button></div>${err}</div>
+        <p class="ai-note">${lines.length} lines on the timeline. Words are checked by ear, so read them once before you publish.</p>`;
+    }
+    const CAP_LANGS = [["ar", "العربية"], ["en", "English"], ["auto", "Auto"]];
+    function capSave() { invoke("cap_save", { path: it.path, words: st.cap.words, lang: st.cap.lang, model: st.cap.model }).catch(() => {}); }
+    function wireCaps() {
+      const c = st.cap, q = (x) => $(x, side);
+      $$("[data-mdl]", side).forEach((b) => (b.onclick = () => { c.model = b.dataset.mdl; drawSide(); }));
+      const lg = q("#cap-lang"); if (lg) $$("button", lg).forEach((b) => (b.onclick = () => { c.lang = b.dataset.l; drawSide(); }));
+      const seg = (id, key, num) => { const e = q(id); if (e) $$("button", e).forEach((b) => (b.onclick = () => { c[key] = num ? +b.dataset.k : b.dataset.k; drawSide(); paint(); })); };
+      seg("#cap-st", "style"); seg("#cap-ps", "pos"); seg("#cap-sz", "size", true);
+      const on = q("#cap-on"); if (on) on.onclick = () => { c.on = !c.on; drawSide(); drawTl(); paint(); };
+      const cn = q("#cap-cancel"); if (cn) cn.onclick = () => invoke("cap_cancel").catch(() => {});
+      const go = q("#cap-go"); if (go) go.onclick = async () => {
+        c.err = ""; const m = c.status.models.find((x) => x.id === c.model);
+        try {
+          if (!m.have) { c.busy = "dl"; c.prog = 0; drawSide(); await invoke("cap_download", { id: c.model }); m.have = true; }
+          c.busy = "run"; c.prog = 0; drawSide();
+          const w = await invoke("cap_run", { path: it.path, model: c.model, lang: c.lang });
+          c.words = w || []; if (!c.words.length) c.err = "No speech was found in this recording.";
+        } catch (e) { c.err = String(e); }
+        c.busy = ""; c.status = null; draw();
+      };
+      const rd = q("#cap-redo"); if (rd) rd.onclick = () => { push(); c.words = []; c.sel = null; capSave(); draw(); };
+      const tr = q("#cap-tr"); if (tr) {
+        $$(".cw", tr).forEach((w) => {
+          w.onclick = (ev) => { const i = +w.dataset.w; if (ev.shiftKey && c.sel) c.sel = [c.sel[0], i]; else { c.sel = [i, i]; const t = srcToTl(c.words[i].s); if (t != null) seek(t); } const lo = Math.min(...c.sel), hi = Math.max(...c.sel); $$(".cw", tr).forEach((x) => x.classList.toggle("sel", +x.dataset.w >= lo && +x.dataset.w <= hi)); const cb = q("#cap-cut"); if (cb) cb.disabled = false; };
+          w.ondblclick = () => { const i = +w.dataset.w, inp = document.createElement("input"); inp.className = "txt cwin"; inp.dir = "auto"; inp.value = c.words[i].w; w.replaceWith(inp); inp.focus(); inp.select(); inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") inp.blur(); else if (e.key === "Escape") { inp.value = c.words[i].w; inp.blur(); } }; inp.onblur = () => { const v = inp.value.trim(); if (v && v !== c.words[i].w) { push(); c.words[i].w = v; capSave(); } drawSide(); drawTl(); paint(); }; };
+        });
+      }
+      const ct = q("#cap-cut"); if (ct) ct.onclick = () => {
+        if (!c.sel) return; const a = Math.min(...c.sel), b = Math.max(...c.sel), s0 = c.words[a].s, e0 = c.words[b].e; push();
+        cutRanges([[s0, e0]]); c.sel = null; st.sel = 0; st.selOv = null; seek(Math.min(st.t, total())); draw(); toast("Removed those words from the video");
+      };
+    }
+    R.listen("cap:dl", (p) => { if (st.cap.busy !== "dl") return; st.cap.prog = p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : 0; const b = $("#cap-bar", el), t = $("#cap-pct", el); if (b) b.style.width = st.cap.prog + "%"; if (t) t.textContent = st.cap.prog + "%"; });
+    R.listen("cap:prog", (p) => { if (st.cap.busy !== "run") return; st.cap.prog = Math.min(100, Math.round(p)); const b = $("#cap-bar", el), t = $("#cap-pct", el); if (b) b.style.width = st.cap.prog + "%"; if (t) t.textContent = st.cap.prog + "%"; });
     function cursorCard() {
       if (!st.cur.length) return "";
       const n = clicksSrc().length, f = st.cfx;
@@ -759,7 +848,7 @@
     }
     function wireCards() {
       $$("[data-goto]", side).forEach((b) => (b.onclick = () => { seek(+b.dataset.goto); if (b.dataset.gid) st.selOv = +b.dataset.gid; else if (b.dataset.gci) st.sel = +b.dataset.gci; drawSide(); drawTl(); }));
-      wireFrame(); wireChapters();
+      wireFrame(); wireChapters(); wireCaps();
       $$("[data-cfx]", side).forEach((b) => (b.onclick = () => { push(); st.cfx[b.dataset.cfx] = !st.cfx[b.dataset.cfx]; drawSide(); paintFx(); }));
       $$("[data-aud]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.aud] = !st[b.dataset.aud]; drawSide(); }));
       $$("[data-fd]", side).forEach((b) => (b.onclick = () => { push(); st[b.dataset.fd] = +b.dataset.v; drawSide(); }));
@@ -858,7 +947,7 @@
         overlays: st.ov.filter((o) => o.kind !== "sound").map((o) => ({ kind: o.kind, start: Math.max(0, shift(o.start)), end: Math.max(0.2, shift(o.end)), x: o.x, y: o.y, w: o.w || 0, h: o.h || 0, text: o.text || "", size: o.size || 0, color: o.color || "", level: o.level || 2, bg: o.bg !== false, shape: o.shape || "", fill: o.fill || 0, thick: o.thick || 0, flipx: !!o.flipx, flipy: !!o.flipy, style: o.style || "", color2: o.color2 || "", mode: o.mode || "", path: o.path || "", opacity: o.opacity || 0, anim: o.anim && o.anim !== "none" ? o.anim : "" })),
         sounds: st.ov.filter((o) => o.kind === "sound").map((o) => ({ kind: o.snd, path: o.path || "", fx: o.fx || "", start: Math.max(0, shift(o.start)), end: Math.max(0, shift(o.start)) + Math.max(0, o.end - o.start), vol: o.vol || 1, fade: o.fade || 0, repeat: !!o.repeat, music: !!o.music, voice: !!o.voice })),
         frame: st.fr.kind && (st.fr.kind !== "image" || st.fr.path) ? { kind: st.fr.kind, color: st.fr.color, color2: st.fr.color2, path: st.fr.path || "", pad: st.fr.pad, radius: st.fr.radius, shadow: st.fr.shadow } : null,
-        denoise: st.dn, mute_orig: st.muteOrig, cursor_fx: cursorFx(), duck: st.duck, fade_in: st.fi, fade_out: st.fo,
+        denoise: st.dn, mute_orig: st.muteOrig, cursor_fx: cursorFx(), captions: capsOut(shift), duck: st.duck, fade_in: st.fi, fade_out: st.fo,
         intro: st.intro ? { text: st.intro.text, sub: st.intro.sub, dur: st.intro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
         outro: st.outro ? { text: st.outro.text, sub: st.outro.sub, dur: st.outro.dur || 3, bg: st.cardc.bg, accent: st.cardc.accent } : null,
       };
@@ -979,7 +1068,7 @@
       const path = []; if (st.cfx.halo) for (const p of st.cur) { const t = m(p[0]); if (t != null) path.push([+t.toFixed(3), p[1], p[2]]); }
       return { rings: st.cfx.rings, halo: st.cfx.halo, ring_color: "#ff3b30", halo_color: "#ffd60a", clicks, path };
     }
-    function paint() { $("#b-time", el).textContent = `${fmt(st.t)} / ${fmt(total())}`; paintHead(); paintOverlays(); paintFx(); }
+    function paint() { $("#b-time", el).textContent = `${fmt(st.t)} / ${fmt(total())}`; paintHead(); paintOverlays(); paintFx(); paintCaps(); }
     function draw() { $("#ed-title", el).textContent = it.name; $$("#ed-pre button", el).forEach((b) => b.classList.toggle("on", b.dataset.k === st.preset)); $("#b-play", el).innerHTML = I(st.playing ? "pause" : "play") + (st.playing ? "Pause" : "Play"); $("#b-undo", el).disabled = !hist.length; drawSide(); drawTl(); paint(); }
     $$("#ed-pre button", el).forEach((b) => (b.onclick = () => { st.preset = b.dataset.k; draw(); }));
     $("#ed-x", el).onclick = closeEditor; $("#ed-go", el).onclick = go;

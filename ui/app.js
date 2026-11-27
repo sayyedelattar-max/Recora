@@ -471,7 +471,8 @@
           <div class="row"><div class="t"><b>Provider</b><span>Pick the service you have an account with</span></div><select id="ai-prov" class="txt">${AI_PROVIDERS.map(([v, n]) => `<option value="${v}"${S.ai_provider === v ? " selected" : ""}>${n}</option>`).join("")}</select></div>
           ${S.ai_provider === "custom" ? `<div class="row"><div class="t"><b>Address</b><span>For example http://localhost:11434/v1</span></div><input id="ai-base" class="txt" placeholder="https://" value="${esc(S.ai_base || "")}" autocomplete="off" spellcheck="false"></div>` : ""}
           <div class="row"><div class="t"><b>API key</b><span>${S.ai_provider === "custom" ? "Only if the service asks for one" : "Stored on this computer only"}</span></div><input type="password" id="ai-key" class="txt" placeholder="Paste your key" value="${esc(aiKey())}" autocomplete="off" spellcheck="false"><button class="btn sm" id="ai-test">Test</button></div>
-          <div class="row"><div class="t"><b>Model</b><span>${S.ai_provider === "custom" || S.ai_provider === "openrouter" ? "Type the model name" : "Leave empty to use the low-cost default"}</span></div><input id="ai-model" class="txt" placeholder="${(AI_PROVIDERS.find((p) => p[0] === S.ai_provider) || [])[2] || "model name"}" value="${esc((S.ai_models && S.ai_models[S.ai_provider]) || "")}" autocomplete="off" spellcheck="false"></div>
+          <div class="row"><div class="t"><b>Model</b><span>${S.ai_provider === "custom" || S.ai_provider === "openrouter" ? "Type the model name" : "Leave empty to use the low-cost default"}</span></div><input id="ai-model" class="txt" list="ai-ml" placeholder="${(AI_PROVIDERS.find((p) => p[0] === S.ai_provider) || [])[2] || "model name"}" value="${esc((S.ai_models && S.ai_models[S.ai_provider]) || "")}" autocomplete="off" spellcheck="false"><datalist id="ai-ml"></datalist><button class="btn sm" id="ai-refresh" title="Get the current list of models from the provider">Refresh</button></div>
+          <div class="row" id="ai-mrow" hidden><div class="t"><span id="ai-mstat"></span></div><button class="btn sm" id="ai-use" hidden></button></div>
           <div class="row"><div class="t"><b>Don't have a key?</b><span>Step by step, about two minutes</span></div><button class="btn sm" id="ai-help">Show me how</button></div>
         </div>
         <p class="foot">Everything works without it. With a key, you can type a sentence such as “remove the first 10 seconds and speed up the boring parts” and the editor prepares the edits for you to review. It never receives your video or sound, only the length and the times of pauses and scene changes: roughly 600 to 1,500 tokens a request, usually a fraction of a cent.</p>
@@ -488,12 +489,32 @@
     S.ai_keys = S.ai_keys || {}; S.ai_models = S.ai_models || {};
     $("#ai-prov").onchange = (e) => { S.ai_provider = e.target.value; persist(); renderSettings(); };
     const ab = $("#ai-base"); if (ab) ab.oninput = (e) => { S.ai_base = e.target.value.trim(); persist(); };
-    $("#ai-key").oninput = (e) => { S.ai_keys[S.ai_provider] = e.target.value.trim(); S.ai_key = S.ai_keys[S.ai_provider]; persist(); };
+    let kt; $("#ai-key").oninput = (e) => { S.ai_keys[S.ai_provider] = e.target.value.trim(); S.ai_key = S.ai_keys[S.ai_provider]; persist(); clearTimeout(kt); kt = setTimeout(() => loadModels(true), 800); };
     $("#ai-model").oninput = (e) => { S.ai_models[S.ai_provider] = e.target.value.trim(); S.ai_model = S.ai_models[S.ai_provider]; persist(); };
     $("#ai-help").onclick = openAiHelp;
+    // the list of models comes from the provider itself, so new models appear and retired ones disappear without an update of Recora
+    const loadModels = async (quiet) => {
+      const p = S.ai_provider, st = $("#ai-mstat"), row = $("#ai-mrow"), use = $("#ai-use"), inp = $("#ai-model"), dl = $("#ai-ml");
+      if (!st || (!aiKey() && p !== "custom" && p !== "openrouter")) return;
+      row.hidden = false; use.hidden = true; st.textContent = "Checking which models are available…";
+      try {
+        const r = await invoke("ai_models", { provider: p, key: aiKey(), base: S.ai_base || "" });
+        if (S.ai_provider !== p) return;
+        dl.innerHTML = r.models.map((m) => `<option value="${esc(m)}"></option>`).join("");
+        const cur = (S.ai_models || {})[p] || "";
+        if (!cur && r.pick) { S.ai_models[p] = r.pick; S.ai_model = r.pick; inp.value = r.pick; persist(); }
+        const now = (S.ai_models || {})[p] || "";
+        if (now && !r.models.includes(now)) {
+          st.textContent = `“${now}” is not offered by this key any more.`;
+          if (r.pick) { use.hidden = false; use.textContent = "Use " + r.pick; use.onclick = () => { S.ai_models[p] = r.pick; S.ai_model = r.pick; inp.value = r.pick; persist(); loadModels(true); }; }
+        } else st.textContent = `${r.models.length} models available. ${now ? "Using " + now + "." : ""}`;
+      } catch (err) { st.textContent = String(err); }
+    };
+    $("#ai-refresh").onclick = () => loadModels();
+    loadModels(true);
     $("#ai-test").onclick = async (e) => {
       const b = e.currentTarget; b.disabled = true; b.textContent = "Testing…";
-      try { await invoke("ai_test", { provider: S.ai_provider, key: aiKey(), model: (S.ai_models || {})[S.ai_provider] || "", base: S.ai_base || "" }); toast("The key works"); } catch (err) { toast(err, true); }
+      try { await invoke("ai_test", { provider: S.ai_provider, key: aiKey(), model: (S.ai_models || {})[S.ai_provider] || "", base: S.ai_base || "" }); toast("The key works"); loadModels(true); } catch (err) { toast(err, true); }
       b.disabled = false; b.textContent = "Test";
     };
     $("#add-zone").onclick = () => invoke("pick_zone").catch((e) => toast(e, true));

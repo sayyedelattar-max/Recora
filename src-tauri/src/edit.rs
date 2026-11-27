@@ -166,8 +166,43 @@ pub struct CursorFx {
     pub path: Vec<[f64; 3]>,
 }
 
+/// One spoken word, on the edited timeline (seconds).
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct CapWord {
+    pub s: f64,
+    pub e: f64,
+    pub w: String,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct CapLine {
+    pub words: Vec<CapWord>,
+}
+
+/// Captions drawn from the spoken words: a line at a time, optionally lighting the word being said.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Captions {
+    /// "classic" | "highlight" | "pop"
+    #[serde(default)]
+    pub style: String,
+    /// "bottom" | "middle" | "top"
+    #[serde(default)]
+    pub pos: String,
+    /// share of the picture height
+    #[serde(default)]
+    pub size: f64,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub hl_color: String,
+    #[serde(default)]
+    pub lines: Vec<CapLine>,
+}
+
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Project {
+    #[serde(default)]
+    pub captions: Option<Captions>,
     pub input: String,
     pub clips: Vec<Clip>,
     #[serde(default)]
@@ -280,6 +315,66 @@ fn ass_time(t: f64) -> String {
 fn ass_col(c: &str, fallback: &str) -> String {
     let [r, g, b] = rgb(if c.is_empty() { fallback } else { c });
     format!("&H{b:02X}{g:02X}{r:02X}&")
+}
+
+fn is_rtl(t: &str) -> bool {
+    let (mut r, mut l) = (0, 0);
+    for c in t.chars() {
+        match c as u32 {
+            0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF => r += 1,
+            _ if c.is_alphabetic() => l += 1,
+            _ => {}
+        }
+    }
+    r > l
+}
+
+fn ass_text(t: &str) -> String {
+    t.replace('\\', "").replace('{', "(").replace('}', ")")
+}
+
+/// Captions as a subtitle file. libass lays runs out left to right across colour changes, so right-to-left lines
+/// are written with their runs in reverse order to read correctly.
+fn captions_ass(c: &Captions, w: u32, h: u32) -> Option<String> {
+    if c.lines.iter().all(|l| l.words.is_empty()) {
+        return None;
+    }
+    let font = if cfg!(windows) { "Segoe UI" } else { "DejaVu Sans" };
+    let size = (h as f64 * if c.size > 0.0 { c.size.clamp(0.02, 0.12) } else { 0.055 }).round();
+    let style = if c.style.is_empty() { "highlight" } else { c.style.as_str() };
+    let (align, mv) = match c.pos.as_str() { "top" => (8, (h as f64 * 0.06) as u32), "middle" => (5, 0), _ => (2, (h as f64 * 0.07) as u32) };
+    let base = ass_col(&c.color, "#ffffff");
+    let hl = ass_col(&c.hl_color, "#ffd60a");
+    let bs = if style == "classic" { 3 } else { 1 };
+    let mut s = format!("[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: C,{font},{size},{base},{base},&H00000000,&HA0000000,1,0,0,0,100,100,0,0,{bs},{},0,{align},{},{},{mv},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n", (size * 0.09).max(2.0).round(), (w as f64 * 0.06) as u32, (w as f64 * 0.06) as u32);
+    for line in c.lines.iter().take(5000) {
+        let ws: Vec<&CapWord> = line.words.iter().filter(|x| !x.w.trim().is_empty()).collect();
+        if ws.is_empty() { continue; }
+        let rtl = is_rtl(&ws.iter().map(|x| x.w.as_str()).collect::<String>());
+        let end = ws.last().unwrap().e.max(ws[0].s + 0.2);
+        if style == "classic" {
+            let txt = ws.iter().map(|x| ass_text(x.w.trim())).collect::<Vec<_>>().join(" ");
+            s += &format!("Dialogue: 1,{},{},C,,0,0,0,,{}\n", ass_time(ws[0].s), ass_time(end), txt);
+            continue;
+        }
+        for (i, cur) in ws.iter().enumerate() {
+            let t0 = if i == 0 { cur.s } else { cur.s.max(ws[i - 1].s) };
+            let t1 = if i + 1 < ws.len() { ws[i + 1].s.max(t0 + 0.05) } else { end };
+            let pre = ws[..i].iter().map(|x| ass_text(x.w.trim())).collect::<Vec<_>>().join(" ");
+            let post = ws[i + 1..].iter().map(|x| ass_text(x.w.trim())).collect::<Vec<_>>().join(" ");
+            let now = ass_text(cur.w.trim());
+            let big = if style == "pop" { "\\fscx115\\fscy115" } else { "" };
+            let cur_run = format!("{{\\1c{hl}{big}}}{now}{{\\1c{base}\\fscx100\\fscy100}}");
+            let mut runs: Vec<String> = Vec::new();
+            if !pre.is_empty() { runs.push(pre); }
+            runs.push(cur_run);
+            if !post.is_empty() { runs.push(post); }
+            let sp = |v: Vec<String>| v.join(" ");
+            if rtl { runs.reverse(); }
+            s += &format!("Dialogue: 1,{},{},C,,0,0,0,,{}\n", ass_time(t0), ass_time(t1), sp(runs));
+        }
+    }
+    Some(s)
 }
 
 /// Click rings (a ring that grows and fades) and a soft glow that follows the mouse, as a subtitle file drawn by ffmpeg.
@@ -568,6 +663,16 @@ pub fn build(p: &Project, has_audio: bool, fps: f64, tmp: &Path) -> Result<(Vec<
             _ => continue,
         }
         cur_v = next;
+    }
+    // captions
+    if let Some(c) = p.captions.as_ref() {
+        if let Some(a) = captions_ass(c, vw, vh) {
+            let path = tmp.join("captions.ass");
+            std::fs::write(&path, a)?;
+            let tf = esc_path(&path.to_string_lossy());
+            g.push(format!("[{cur_v}]ass=filename='{tf}'[cap]"));
+            cur_v = "cap".to_string();
+        }
     }
     // click rings and a mouse glow
     if let Some(fx) = p.cursor_fx.as_ref() {
@@ -1116,6 +1221,36 @@ mod tests {
         export_to(&p, &out).unwrap();
         assert!(ffmpeg::duration(&out).unwrap() > 1.0);
         if let Some(k) = std::env::var_os("RECORA_KEEP") { let _ = std::fs::copy(&out, k); }
+    }
+
+    #[test]
+    fn writes_arabic_captions_in_reading_order() {
+        let w = |s: f64, t: &str| CapWord { s, e: s + 0.4, w: t.into() };
+        let c = Captions { style: "highlight".into(), lines: vec![CapLine { words: vec![w(0.0, "مرحبا"), w(0.4, "بكم"), w(0.8, "في")] }], ..Default::default() };
+        let a = captions_ass(&c, 1280, 720).unwrap();
+        let ev: Vec<&str> = a.lines().filter(|l| l.starts_with("Dialogue")).collect();
+        assert_eq!(ev.len(), 3);
+        // right-to-left: the last word comes first in the file, so the first word ends up on the right
+        assert!(ev[0].find("في").unwrap() < ev[0].find("مرحبا").unwrap() || ev[0].find("مرحبا").is_some());
+        let e2 = ev[2];
+        assert!(e2.find("في").unwrap() < e2.find("مرحبا").unwrap());
+        let en = Captions { lines: vec![CapLine { words: vec![w(0.0, "hello"), w(0.4, "world")] }], ..Default::default() };
+        let a = captions_ass(&en, 1280, 720).unwrap();
+        let e0 = a.lines().find(|l| l.starts_with("Dialogue")).unwrap();
+        assert!(e0.find("hello").unwrap() < e0.find("world").unwrap());
+    }
+
+    #[test]
+    fn burns_captions_into_the_video() {
+        if !ffmpeg::available() { return; }
+        let d = tempfile_dir("caps");
+        let src = sample(&d);
+        let mut p = proj(src);
+        let w = |s: f64, t: &str| CapWord { s, e: s + 0.4, w: t.into() };
+        p.captions = Some(Captions { style: "pop".into(), lines: vec![CapLine { words: vec![w(0.2, "مرحبا"), w(0.6, "بكم"), w(1.0, "في")] }], ..Default::default() });
+        let out = d.join("cap.mp4");
+        export_to(&p, &out).unwrap();
+        assert!(ffmpeg::duration(&out).unwrap() > 1.0);
     }
 
     #[test]
